@@ -6,6 +6,7 @@ import { serializeUserWithDocs } from "../services/user.service.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.middleware.js";
 import { writeAudit } from "../services/audit.service.js";
 import { sendTemplatedEmail } from "../services/email/mailer.js";
+import { createNotification } from "../services/notification.service.js";
 
 export const authRouter = Router();
 
@@ -121,6 +122,24 @@ authRouter.post("/login", async (req, res) => {
     return res.status(403).json({ error: "Your account is deactivated. Contact MINALOC support." });
   }
 
+  if (user.role === "coordinator" && user.mustChangePassword) {
+    const ageMs = Date.now() - user.createdAt.getTime();
+    const maxAgeMs = 24 * 60 * 60 * 1000;
+    if (ageMs > maxAgeMs) {
+      await writeAudit("AUTH_LOGIN_FAILURE", { req, metadata: { email, userId: user.id, reason: "temporary_credentials_expired" } });
+      await createNotification({
+        userId: user.id,
+        type: "WARNING",
+        title: "Temporary credentials expired",
+        message: "Your initial invitation expired. Contact MINALOC admin for a password reset.",
+        metadata: { reason: "temporary_credentials_expired" },
+      });
+      return res.status(403).json({
+        error: "Temporary invitation expired after 24 hours. Contact admin for credential reset.",
+      });
+    }
+  }
+
   if (user.role === "volunteer" && user.verificationStatus === "pending") {
     await writeAudit("AUTH_LOGIN_FAILURE", { req, metadata: { email, userId: user.id, reason: "volunteer_pending" } });
     return res.status(403).json({
@@ -165,4 +184,18 @@ authRouter.post("/change-password", requireAuth, async (req: AuthRequest, res) =
   const ok = await verifyPassword(parsed.data.currentPassword, user.passwordHash);
   if (!ok) return res.status(400).json({ error: "Current password is incorrect" });
 
-  c
+  const nextHash = await hashPassword(parsed.data.newPassword);
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash: nextHash, mustChangePassword: false },
+  });
+
+  await writeAudit("AUTH_PASSWORD_CHANGED", {
+    actorUserId: user.id,
+    targetUserId: user.id,
+    req,
+    metadata: { mustChangePasswordWas: user.mustChangePassword },
+  });
+
+  res.json({ message: "Password changed successfully" });
+});

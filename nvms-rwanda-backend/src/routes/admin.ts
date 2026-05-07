@@ -5,6 +5,7 @@ import { requireAuth, requireRoles, type AuthRequest } from "../middlewares/auth
 import { hashPassword } from "../services/auth.service.js";
 import { writeAudit } from "../services/audit.service.js";
 import { sendTemplatedEmail } from "../services/email/mailer.js";
+import { createNotification } from "../services/notification.service.js";
 
 export const adminRouter = Router();
 
@@ -93,6 +94,13 @@ adminRouter.post("/users", async (req: AuthRequest, res) => {
       role: "coordinator",
       district: created.district ?? "",
     },
+  });
+  await createNotification({
+    userId: created.id,
+    type: "INFO",
+    title: "You were invited as coordinator",
+    message: "Use temporary credentials from your invitation email and change password within 24 hours.",
+    metadata: { district: created.district },
   });
 
   res.status(201).json({ user: created, temporaryPassword: tempPassword });

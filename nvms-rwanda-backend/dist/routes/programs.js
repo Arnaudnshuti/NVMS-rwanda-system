@@ -53,7 +53,8 @@ const upsertProgramSchema = z.object({
     title: z.string().min(1),
     description: z.string(),
     category: z.string().min(1),
-    district: z.string().min(1),
+    district: z.string().min(1).optional(),
+    districtId: z.string().min(1).optional(),
     sector: z.string().optional(),
     startDate: z.string(),
     endDate: z.string(),
@@ -70,10 +71,22 @@ programsRouter.post("/", requireAuth, requireRoles("admin", "coordinator"), asyn
     const me = await prisma.user.findUnique({ where: { id: req.userId } });
     if (!me)
         return res.status(401).json({ error: "Unauthorized" });
+    let districtName = parsed.data.district;
+    let districtId = parsed.data.districtId;
+    if (districtId) {
+        const d = await prisma.district.findUnique({ where: { id: districtId } });
+        if (!d || !d.isActive)
+            return res.status(400).json({ error: "Invalid districtId" });
+        districtName = d.name;
+    }
+    if (!districtName)
+        return res.status(400).json({ error: "district or districtId is required" });
     if (me.role === "coordinator") {
-        if (!me.district || parsed.data.district !== me.district) {
+        if ((me.districtId && districtId !== me.districtId) || (!me.districtId && me.district && districtName !== me.district)) {
             return res.status(403).json({ error: "Coordinators may only create programs in their district." });
         }
+        districtId = me.districtId ?? districtId;
+        districtName = me.district ?? districtName;
     }
     const body = parsed.data;
     const program = await prisma.program.create({
@@ -81,7 +94,8 @@ programsRouter.post("/", requireAuth, requireRoles("admin", "coordinator"), asyn
             title: body.title,
             description: body.description,
             category: body.category,
-            district: body.district,
+            district: districtName,
+            districtId,
             sector: body.sector,
             startDate: new Date(body.startDate),
             endDate: new Date(body.endDate),

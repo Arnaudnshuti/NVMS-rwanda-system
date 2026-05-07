@@ -4,6 +4,7 @@ import { prisma } from "../services/prisma.service.js";
 import { requireAuth, requireRoles } from "../middlewares/auth.middleware.js";
 import { writeAudit } from "../services/audit.service.js";
 import { sendTemplatedEmail } from "../services/email/mailer.js";
+import { createNotification } from "../services/notification.service.js";
 export const coordinatorRouter = Router();
 coordinatorRouter.use(requireAuth, requireRoles("admin", "coordinator"));
 coordinatorRouter.get("/volunteers", async (req, res) => {
@@ -95,6 +96,13 @@ coordinatorRouter.patch("/volunteers/:userId/verification", async (req, res) => 
                 role: "volunteer",
             },
         });
+        await createNotification({
+            userId: updated.id,
+            type: "SUCCESS",
+            title: "Registration approved",
+            message: "Your volunteer registration has been approved. You can now sign in.",
+            metadata: { verificationStatus: "verified" },
+        });
     }
     else {
         await writeAudit("COORDINATOR_VOLUNTEER_REJECTED", {
@@ -102,6 +110,13 @@ coordinatorRouter.patch("/volunteers/:userId/verification", async (req, res) => 
             targetUserId: updated.id,
             req,
             metadata: { email: updated.email, district: updated.district },
+        });
+        await createNotification({
+            userId: updated.id,
+            type: "WARNING",
+            title: "Registration not approved",
+            message: "Your volunteer registration was not approved. Contact your district coordinator.",
+            metadata: { verificationStatus: "rejected" },
         });
     }
     res.json(updated);

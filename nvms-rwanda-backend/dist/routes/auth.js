@@ -5,6 +5,8 @@ import { hashPassword, verifyPassword, signAccessToken } from "../services/auth.
 import { serializeUserWithDocs } from "../services/user.service.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
 import { writeAudit } from "../services/audit.service.js";
+import { sendTemplatedEmail } from "../services/email/mailer.js";
+import { createNotification } from "../services/notification.service.js";
 export const authRouter = Router();
 const registerSchema = z.object({
     name: z.string().min(1),
@@ -59,6 +61,19 @@ authRouter.post("/register", async (req, res) => {
             skills: [],
         },
     });
+    const link = process.env.SYSTEM_LOGIN_LINK ?? "http://localhost:5173/login";
+    await sendTemplatedEmail({
+        templateId: "volunteer_registration_received",
+        to: user.email,
+        targetUserId: user.id,
+        vars: {
+            name: user.name,
+            district: user.district ?? "your district",
+            link,
+            role: "volunteer",
+            email: user.email,
+        },
+    });
     return res.status(201).json({
         message: "Registration received. Sign in after your coordinator approves your account.",
         userId: user.id,
@@ -95,6 +110,23 @@ authRouter.post("/login", async (req, res) => {
     if (!user.isActive) {
         await writeAudit("AUTH_LOGIN_FAILURE", { req, metadata: { email, userId: user.id, reason: "inactive" } });
         return res.status(403).json({ error: "Your account is deactivated. Contact MINALOC support." });
+    }
+    if (user.role === "coordinator" && user.mustChangePassword) {
+        const ageMs = Date.now() - user.createdAt.getTime();
+        const maxAgeMs = 24 * 60 * 60 * 1000;
+        if (ageMs > maxAgeMs) {
+            await writeAudit("AUTH_LOGIN_FAILURE", { req, metadata: { email, userId: user.id, reason: "temporary_credentials_expired" } });
+            await createNotification({
+                userId: user.id,
+                type: "WARNING",
+                title: "Temporary credentials expired",
+                message: "Your initial invitation expired. Contact MINALOC admin for a password reset.",
+                metadata: { reason: "temporary_credentials_expired" },
+            });
+            return res.status(403).json({
+                error: "Temporary invitation expired after 24 hours. Contact admin for credential reset.",
+            });
+        }
     }
     if (user.role === "volunteer" && user.verificationStatus === "pending") {
         await writeAudit("AUTH_LOGIN_FAILURE", { req, metadata: { email, userId: user.id, reason: "volunteer_pending" } });

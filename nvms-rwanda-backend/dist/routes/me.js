@@ -5,6 +5,7 @@ import { requireAuth } from "../middlewares/auth.middleware.js";
 import { serializeUserWithDocs } from "../services/user.service.js";
 import multer from "multer";
 import { ensureUploadsDir, makeSafeFileName, publicUploadUrl, uploadsDir } from "../services/uploads.service.js";
+import { createNotification } from "../services/notification.service.js";
 export const meRouter = Router();
 meRouter.use(requireAuth);
 const upload = multer({
@@ -186,6 +187,12 @@ meRouter.get("/activity-logs", async (req, res) => {
         where: { volunteerId: req.userId },
         orderBy: { date: "desc" },
         take: 100,
+        include: {
+            attachments: {
+                select: { id: true, fileName: true, storageKey: true, contentType: true },
+                orderBy: { createdAt: "asc" },
+            },
+        },
     });
     res.json(list.map((l) => ({
         id: l.id,
@@ -195,5 +202,89 @@ meRouter.get("/activity-logs", async (req, res) => {
         hours: Number(l.hours),
         description: l.description,
         status: l.status,
+        attachments: l.attachments.map((a) => ({
+            id: a.id,
+            fileName: a.fileName,
+            contentType: a.contentType ?? undefined,
+            url: publicUploadUrl(a.storageKey),
+        })),
     })));
+});
+meRouter.post("/activity-logs", upload.array("files", 8), async (req, res) => {
+    const parsed = z
+        .object({
+        programId: z.string().min(1),
+        date: z.string().min(1),
+        hours: z.coerce.number().positive(),
+        description: z.string().min(1),
+    })
+        .safeParse(req.body);
+    if (!parsed.success)
+        return res.status(400).json({ error: parsed.error.flatten() });
+    const assignment = await prisma.assignment.findFirst({
+        where: { volunteerId: req.userId, programId: parsed.data.programId },
+    });
+    if (!assignment)
+        return res.status(403).json({ error: "You can only report for your assigned programs." });
+    const created = await prisma.activityLog.create({
+        data: {
+            volunteerId: req.userId,
+            programId: parsed.data.programId,
+            date: new Date(parsed.data.date),
+            hours: parsed.data.hours,
+            description: parsed.data.description,
+            status: "pending",
+        },
+    });
+    const files = req.files ?? [];
+    if (files.length) {
+        await prisma.activityAttachment.createMany({
+            data: files.map((f) => ({
+                activityLogId: created.id,
+                fileName: f.originalname,
+                storageKey: f.filename,
+                contentType: f.mimetype,
+            })),
+        });
+    }
+    await createNotification({
+        userId: req.userId,
+        type: "SUCCESS",
+        title: "Activity submitted",
+        message: "Your activity report was submitted and is awaiting review.",
+        metadata: { activityLogId: created.id, programId: created.programId },
+    });
+    return res.status(201).json({ id: created.id, message: "Activity submitted" });
+});
+meRouter.get("/notifications", async (req, res) => {
+    const list = await prisma.notification.findMany({
+        where: { userId: req.userId },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+    });
+    res.json(list.map((n) => ({
+        id: n.id,
+        title: n.title,
+        message: n.message,
+        type: n.type,
+        readAt: n.readAt?.toISOString(),
+        createdAt: n.createdAt.toISOString(),
+        metadata: n.metadata,
+    })));
+});
+meRouter.patch("/notifications/:id/read", async (req, res) => {
+    const updated = await prisma.notification.updateMany({
+        where: { id: req.params.id, userId: req.userId },
+        data: { readAt: new Date() },
+    });
+    if (updated.count === 0)
+        return res.status(404).json({ error: "Notification not found" });
+    res.json({ ok: true });
+});
+meRouter.patch("/notifications/read-all", async (req, res) => {
+    await prisma.notification.updateMany({
+        where: { userId: req.userId, readAt: null },
+        data: { readAt: new Date() },
+    });
+    res.json({ ok: true });
 });

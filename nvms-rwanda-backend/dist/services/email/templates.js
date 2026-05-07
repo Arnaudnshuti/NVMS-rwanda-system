@@ -43,6 +43,23 @@ export function getTemplate(templateId) {
             ].join("\n"),
         };
     }
+    if (templateId === "volunteer_registration_received") {
+        return {
+            subject: "NVMS Rwanda — Registration received",
+            text: [
+                "Hello {{name}},",
+                "",
+                "Your volunteer registration has been received for district {{district}}.",
+                "A coordinator will review your registration and notify you when approved.",
+                "",
+                "Login link: {{link}}",
+                "",
+                "Role: {{role}}",
+                "",
+                "— NVMS Rwanda",
+            ].join("\n"),
+        };
+    }
     return {
         subject: "NVMS Rwanda — Password update required",
         text: [

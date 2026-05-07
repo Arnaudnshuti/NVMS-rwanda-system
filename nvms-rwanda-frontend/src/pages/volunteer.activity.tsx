@@ -14,6 +14,7 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { volunteerProfileForAuthUser } from "@/lib/volunteer-profile";
+import { fetchActivityLogsFromApi, fetchMyAssignmentsFromApi, nvmsApiEnabled, submitActivityLogApi } from "@/lib/nvms-api";
 
 
 function ActivityPage() {
@@ -29,28 +30,97 @@ function ActivityPageInner() {
   if (!user) return null;
   const v = volunteerProfileForAuthUser(user);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [files, setFiles] = useState<FileList | null>(null);
+  const [myAssignments, setMyAssignments] = useState(ASSIGNMENTS.filter((a) => a.volunteerId === v.id));
+  const apiOn = nvmsApiEnabled();
 
   useEffect(() => {
-    setLogs(ACTIVITY_LOGS.filter((l) => l.volunteerId === v.id));
+    if (!apiOn) {
+      setLogs(ACTIVITY_LOGS.filter((l) => l.volunteerId === v.id));
+      return;
+    }
+    void (async () => {
+      try {
+        const [remoteLogs, remoteAssignments] = await Promise.all([fetchActivityLogsFromApi(), fetchMyAssignmentsFromApi()]);
+        setLogs(
+          remoteLogs.map((l) => ({
+            id: l.id,
+            volunteerId: l.volunteerId,
+            programId: l.programId,
+            date: l.date,
+            hours: Number(l.hours),
+            description: l.description,
+            status: l.status,
+          })),
+        );
+        setMyAssignments(
+          remoteAssignments.map((a) => ({
+            id: a.id,
+            volunteerId: a.volunteerId,
+            programId: a.programId,
+            programTitle: a.programTitle,
+            district: a.district,
+            startDate: a.startDate,
+            endDate: a.endDate,
+            status: a.status,
+            hoursLogged: a.hoursLogged,
+          })),
+        );
+      } catch {
+        toast.error("Could not load activity data");
+      }
+    })();
   }, [v.id]);
   const [form, setForm] = useState({ programId: "", date: new Date().toISOString().slice(0, 10), hours: "", description: "" });
 
-  const myAssignments = ASSIGNMENTS.filter((a) => a.volunteerId === v.id);
-
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const newLog: ActivityLog = {
-      id: "l" + Date.now(),
-      volunteerId: v.id,
-      programId: form.programId,
-      date: form.date,
-      hours: Number(form.hours),
-      description: form.description,
-      status: "pending",
-    };
-    setLogs([newLog, ...logs]);
-    setForm({ programId: "", date: new Date().toISOString().slice(0, 10), hours: "", description: "" });
-    toast.success("Activity submitted for approval");
+    void (async () => {
+      if (apiOn) {
+        const res = await submitActivityLogApi({
+          programId: form.programId,
+          date: form.date,
+          hours: Number(form.hours),
+          description: form.description,
+          files: files ? Array.from(files) : [],
+        });
+        if (!res.ok) {
+          toast.error(res.error);
+          return;
+        }
+        toast.success("Activity submitted for approval");
+        try {
+          const remoteLogs = await fetchActivityLogsFromApi();
+          setLogs(
+            remoteLogs.map((l) => ({
+              id: l.id,
+              volunteerId: l.volunteerId,
+              programId: l.programId,
+              date: l.date,
+              hours: Number(l.hours),
+              description: l.description,
+              status: l.status,
+            })),
+          );
+        } catch {
+          // no-op
+        }
+      } else {
+        const newLog: ActivityLog = {
+          id: "l" + Date.now(),
+          volunteerId: v.id,
+          programId: form.programId,
+          date: form.date,
+          hours: Number(form.hours),
+          description: form.description,
+          status: "pending",
+        };
+        setLogs([newLog, ...logs]);
+        toast.success("Activity submitted for approval");
+      }
+      setFiles(null);
+      setForm({ programId: "", date: new Date().toISOString().slice(0, 10), hours: "", description: "" });
+    })();
   };
 
   return (
@@ -82,6 +152,10 @@ function ActivityPageInner() {
               <div><Label>Date</Label><Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
               <div><Label>Hours</Label><Input type="number" step="0.5" min="0.5" value={form.hours} onChange={(e) => setForm({ ...form, hours: e.target.value })} required /></div>
               <div><Label>Description</Label><Textarea rows={4} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} required placeholder="What did you do?" /></div>
+              <div>
+                <Label>Supporting documents (images/PDF)</Label>
+                <Input type="file" accept="image/*,.pdf,.doc,.docx" multiple onChange={(e) => setFiles(e.target.files)} />
+              </div>
               <Button type="submit" className="w-full" disabled={!form.programId}>Submit log</Button>
             </form>
           </CardContent>

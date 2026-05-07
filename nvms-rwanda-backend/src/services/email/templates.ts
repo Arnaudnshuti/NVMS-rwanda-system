@@ -65,4 +65,29 @@ export function getTemplate(templateId: EmailTemplateId) {
         "",
         "Role: {{role}}",
         "",
-        "
+        "— NVMS Rwanda",
+      ].join("\n"),
+    };
+  }
+  return {
+    subject: "NVMS Rwanda — Password update required",
+    text: [
+      "Hello {{name}},",
+      "",
+      "For security, you must update your password before continuing.",
+      "",
+      "Link: {{link}}",
+      "",
+      "— NVMS Rwanda",
+    ].join("\n"),
+  };
+}
+
+export function renderTemplate(templateId: EmailTemplateId, vars: TemplateVars) {
+  const t = getTemplate(templateId);
+  return {
+    subject: render(t.subject, vars),
+    text: render(t.text, vars),
+  };
+}
+

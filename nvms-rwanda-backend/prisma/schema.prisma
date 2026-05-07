@@ -100,6 +100,7 @@ model User {
   programsCoordinated Program[]        @relation("ProgramCoordinator")
   auditLogsAsActor   AuditLog[]        @relation("AuditActor")
   auditLogsAsTarget  AuditLog[]        @relation("AuditTarget")
+  notifications      Notification[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -117,7 +118,8 @@ model District {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users User[]
+  users    User[]
+  programs Program[]
 
   @@index([name])
   @@index([code])
@@ -209,8 +211,21 @@ model ActivityLog {
   hours       Decimal                  @db.Decimal(6, 2)
   description String
   status      ActivityLogReviewStatus @default(pending)
+  attachments ActivityAttachment[]
 
   @@index([volunteerId])
+}
+
+model ActivityAttachment {
+  id            String      @id @default(cuid())
+  activityLogId String
+  activityLog   ActivityLog @relation(fields: [activityLogId], references: [id], onDelete: Cascade)
+  fileName      String
+  storageKey    String
+  contentType   String?
+  createdAt     DateTime    @default(now())
+
+  @@index([activityLogId])
 }
 
 model PlatformConfig {
@@ -228,6 +243,28 @@ enum AuditActionType {
   COORDINATOR_VOLUNTEER_APPROVED
   COORDINATOR_VOLUNTEER_REJECTED
   EMAIL_SENT
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+model Notification {
+  id         String           @id @default(cuid())
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title      String
+  message    String
+  type       NotificationType @default(INFO)
+  readAt     DateTime?
+  metadata   Json?
+  createdAt  DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@index([readAt])
 }
 
 model AuditLog {

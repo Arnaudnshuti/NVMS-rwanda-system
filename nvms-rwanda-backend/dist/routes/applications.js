@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../services/prisma.service.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
 import { volunteerEligibleToApply, eligibilityReason } from "../services/eligibility.service.js";
+import { createNotification } from "../services/notification.service.js";
 export const applicationsRouter = Router();
 function serializeApplication(a) {
     return {
@@ -51,6 +52,25 @@ applicationsRouter.post("/", requireAuth, async (req, res) => {
         },
         include: { volunteer: { select: { email: true, name: true, district: true } } },
     });
+    if (program.coordinatorUserId) {
+        await createNotification({
+            userId: program.coordinatorUserId,
+            type: "INFO",
+            title: "New volunteer application",
+            message: `${volunteer.name} applied to ${program.title}.`,
+            metadata: { programId: program.id, applicationId: app.id },
+        });
+    }
+    else {
+        const admins = await prisma.user.findMany({ where: { role: "admin", isActive: true }, select: { id: true } });
+        await Promise.all(admins.map((a) => createNotification({
+            userId: a.id,
+            type: "INFO",
+            title: "Ministry program application",
+            message: `${volunteer.name} applied to ${program.title}.`,
+            metadata: { programId: program.id, applicationId: app.id },
+        })));
+    }
     res.status(201).json(serializeApplication(app));
 });
 applicationsRouter.get("/", requireAuth, async (req, res) => {
@@ -72,11 +92,9 @@ applicationsRouter.get("/", requireAuth, async (req, res) => {
         });
         return res.json(list.map(serializeApplication));
     }
-    // coordinator
-    if (!me.district)
-        return res.json([]);
+    // coordinator: only programs owned by this coordinator.
     const programs = await prisma.program.findMany({
-        where: { district: me.district },
+        where: { coordinatorUserId: me.id },
         select: { id: true },
     });
     const ids = programs.map((p) => p.id);
@@ -114,8 +132,10 @@ applicationsRouter.patch("/:id", requireAuth, async (req, res) => {
         }
     }
     else if (me.role === "coordinator") {
-        if (app.program.district !== me.district)
+        // Ministry-owned programs must be reviewed by admin.
+        if (!app.program.coordinatorUserId || app.program.coordinatorUserId !== me.id) {
             return res.status(403).json({ error: "Forbidden" });
+        }
     }
     else if (me.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
@@ -129,5 +149,14 @@ applicationsRouter.patch("/:id", requireAuth, async (req, res) => {
         },
         include: { volunteer: { select: { email: true, name: true, district: true } } },
     });
+    if (me.role !== "volunteer") {
+        await createNotification({
+            userId: updated.volunteerId,
+            type: parsed.data.status === "accepted" ? "SUCCESS" : parsed.data.status === "rejected" ? "WARNING" : "INFO",
+            title: "Application status updated",
+            message: `Your application status is now ${parsed.data.status.replace("_", " ")}.`,
+            metadata: { applicationId: updated.id, status: parsed.data.status, programId: updated.programId },
+        });
+    }
     res.json(serializeApplication(updated));
 });

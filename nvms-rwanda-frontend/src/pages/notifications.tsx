@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { PortalShell } from "@/components/PortalShell";
 import { PageHeader } from "@/components/DashboardUI";
@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Bell, CheckCircle2, AlertTriangle, Info, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { listMyNotificationsApi, markAllNotificationsReadApi, markNotificationReadApi, nvmsApiEnabled } from "@/lib/nvms-api";
 
 type N = {
   id: string;
@@ -50,9 +51,34 @@ function NotificationsPage() {
 
 export function NotificationsCenter({ role }: { role: "volunteer" | "coordinator" | "admin" }) {
   const [items, setItems] = useState<N[]>(SEED);
+  const apiOn = nvmsApiEnabled();
+  useEffect(() => {
+    if (!apiOn) return;
+    void (async () => {
+      const r = await listMyNotificationsApi();
+      if (!r.ok) return;
+      setItems(
+        r.data.map((n) => ({
+          id: n.id,
+          icon: n.type === "SUCCESS" ? CheckCircle2 : n.type === "WARNING" ? AlertTriangle : n.type === "ERROR" ? AlertTriangle : Info,
+          title: n.title,
+          desc: n.message,
+          time: new Date(n.createdAt).toLocaleString(),
+          unread: !n.readAt,
+          tone: n.type === "SUCCESS" ? "success" : n.type === "WARNING" ? "warn" : n.type === "ERROR" ? "warn" : "info",
+        })),
+      );
+    })();
+  }, [apiOn]);
   const unread = useMemo(() => items.filter((i) => i.unread).length, [items]);
-  const markAll = () => setItems((prev) => prev.map((i) => ({ ...i, unread: false })));
-  const markOne = (id: string) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, unread: false } : i)));
+  const markAll = () => {
+    setItems((prev) => prev.map((i) => ({ ...i, unread: false })));
+    if (apiOn) void markAllNotificationsReadApi();
+  };
+  const markOne = (id: string) => {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, unread: false } : i)));
+    if (apiOn) void markNotificationReadApi(id);
+  };
 
   return (
     <PortalShell role={role}>

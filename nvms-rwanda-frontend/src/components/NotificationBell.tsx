@@ -1,5 +1,5 @@
 import { Bell, CheckCircle2, AlertTriangle, Info, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
+import { listMyNotificationsApi, markAllNotificationsReadApi, markNotificationReadApi, nvmsApiEnabled } from "@/lib/nvms-api";
 
 type N = { id: string; icon: typeof Bell; title: string; desc: string; time: string; unread: boolean; tone: "info" | "success" | "warn" | "ai" };
 
@@ -24,9 +25,32 @@ const SEED: N[] = [
 export function NotificationBell() {
   const { t } = useTranslation();
   const [items, setItems] = useState<N[]>(SEED);
+  const apiOn = nvmsApiEnabled();
   const unread = items.filter((i) => i.unread).length;
 
-  const markAll = () => setItems((prev) => prev.map((i) => ({ ...i, unread: false })));
+  useEffect(() => {
+    if (!apiOn) return;
+    void (async () => {
+      const r = await listMyNotificationsApi();
+      if (!r.ok) return;
+      setItems(
+        r.data.map((n) => ({
+          id: n.id,
+          icon: n.type === "SUCCESS" ? CheckCircle2 : n.type === "WARNING" ? AlertTriangle : n.type === "ERROR" ? AlertTriangle : Info,
+          title: n.title,
+          desc: n.message,
+          time: new Date(n.createdAt).toLocaleString(),
+          unread: !n.readAt,
+          tone: n.type === "SUCCESS" ? "success" : n.type === "WARNING" ? "warn" : n.type === "ERROR" ? "warn" : "info",
+        })),
+      );
+    })();
+  }, [apiOn]);
+
+  const markAll = () => {
+    setItems((prev) => prev.map((i) => ({ ...i, unread: false })));
+    if (apiOn) void markAllNotificationsReadApi();
+  };
 
   return (
     <DropdownMenu>
@@ -60,7 +84,15 @@ export function NotificationBell() {
               ai: "bg-accent/10 text-accent",
             }[n.tone];
             return (
-              <div key={n.id} className={cn("flex gap-3 p-3 transition-colors hover:bg-muted/50", n.unread && "bg-primary/[0.03]")}>
+              <div
+                key={n.id}
+                className={cn("flex gap-3 p-3 transition-colors hover:bg-muted/50", n.unread && "bg-primary/[0.03]")}
+                onMouseEnter={() => {
+                  if (!n.unread) return;
+                  setItems((prev) => prev.map((x) => (x.id === n.id ? { ...x, unread: false } : x)));
+                  if (apiOn) void markNotificationReadApi(n.id);
+                }}
+              >
                 <div className={cn("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full", toneCls)}>
                   <Icon className="h-4 w-4" />
                 </div>

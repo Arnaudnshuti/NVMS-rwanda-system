@@ -150,6 +150,22 @@ export async function fetchActivityLogsFromApi(): Promise<ApiActivityLog[]> {
   return res.data;
 }
 
+export async function submitActivityLogApi(body: {
+  programId: string;
+  date: string;
+  hours: number;
+  description: string;
+  files?: File[];
+}) {
+  const form = new FormData();
+  form.append("programId", body.programId);
+  form.append("date", body.date);
+  form.append("hours", String(body.hours));
+  form.append("description", body.description);
+  for (const f of body.files ?? []) form.append("files", f);
+  return apiFetchJson<{ id: string; message: string }>("/api/me/activity-logs", { method: "POST", body: form });
+}
+
 export async function patchMyProfileApi(patch: Record<string, unknown>) {
   return apiFetchJson<Record<string, unknown>>("/api/me/profile", { method: "PATCH", json: patch });
 }
@@ -293,6 +309,28 @@ export async function uploadIdentityDocumentApi(label: string, file: File) {
 
 export async function listMyIdentityDocumentsApi() {
   return apiFetchJson<ApiIdentityDocument[]>("/api/me/identity-documents");
+}
+
+export type ApiNotification = {
+  id: string;
+  title: string;
+  message: string;
+  type: "INFO" | "SUCCESS" | "WARNING" | "ERROR";
+  readAt?: string;
+  createdAt: string;
+  metadata?: unknown;
+};
+
+export async function listMyNotificationsApi() {
+  return apiFetchJson<ApiNotification[]>("/api/me/notifications");
+}
+
+export async function markNotificationReadApi(id: string) {
+  return apiFetchJson<{ ok: true }>(`/api/me/notifications/${encodeURIComponent(id)}/read`, { method: "PATCH" });
+}
+
+export async function markAllNotificationsReadApi() {
+  return apiFetchJson<{ ok: true }>("/api/me/notifications/read-all", { method: "PATCH" });
 }
 
 export async function changePasswordApi(currentPassword: string, newPassword: string) {

@@ -10,12 +10,27 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { getPlatformMasterData, savePlatformMasterData } from "@/lib/platform-config";
-import { nvmsApiEnabled, putPlatformConfigApi } from "@/lib/nvms-api";
+import { getPlatformConfigApi, nvmsApiEnabled, putPlatformConfigApi } from "@/lib/nvms-api";
+import { useEffect } from "react";
 
 
 function SettingsPage() {
   const [volCatText, setVolCatText] = useState(() => getPlatformMasterData().volunteerCategories.join("\n"));
   const [progTypesText, setProgTypesText] = useState(() => getPlatformMasterData().programTypes.join("\n"));
+  const [organizationName, setOrganizationName] = useState("Ministry of Local Government — Rwanda");
+  const [contactEmail, setContactEmail] = useState("volunteer@minaloc.gov.rw");
+  const [supportPhone, setSupportPhone] = useState("+250 788 000 000");
+
+  useEffect(() => {
+    if (!nvmsApiEnabled()) return;
+    void (async () => {
+      const r = await getPlatformConfigApi();
+      if (!r.ok) return;
+      setOrganizationName(r.data.organizationName ?? "Ministry of Local Government — Rwanda");
+      setContactEmail(r.data.contactEmail ?? "volunteer@minaloc.gov.rw");
+      setSupportPhone(r.data.supportPhone ?? "+250 788 000 000");
+    })();
+  }, []);
 
   const saveTaxonomy = () => {
     void (async () => {
@@ -26,7 +41,13 @@ function SettingsPage() {
         return;
       }
       if (nvmsApiEnabled()) {
-        const res = await putPlatformConfigApi({ volunteerCategories, programTypes });
+        const res = await putPlatformConfigApi({
+          volunteerCategories,
+          programTypes,
+          organizationName,
+          contactEmail,
+          supportPhone,
+        });
         if (!res.ok) {
           toast.error(res.error);
           return;
@@ -90,10 +111,10 @@ function SettingsPage() {
         <Card>
           <CardHeader><CardTitle>Organization</CardTitle></CardHeader>
           <CardContent className="space-y-4">
-            <div><Label>Organization name</Label><Input defaultValue="Ministry of Local Government — Rwanda" /></div>
-            <div><Label>Contact email</Label><Input defaultValue="volunteer@minaloc.gov.rw" /></div>
-            <div><Label>Support phone</Label><Input defaultValue="+250 788 000 000" /></div>
-            <Button onClick={() => toast.success("Saved")}>Save changes</Button>
+            <div><Label>Organization name</Label><Input value={organizationName} onChange={(e) => setOrganizationName(e.target.value)} /></div>
+            <div><Label>Contact email</Label><Input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} /></div>
+            <div><Label>Support phone</Label><Input value={supportPhone} onChange={(e) => setSupportPhone(e.target.value)} /></div>
+            <Button onClick={saveTaxonomy}>Save changes</Button>
           </CardContent>
         </Card>
         <Card>

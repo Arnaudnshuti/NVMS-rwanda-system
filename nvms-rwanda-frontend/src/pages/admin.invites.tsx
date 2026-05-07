@@ -8,8 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
-import { nvmsApiEnabled, adminCreateCoordinatorApi } from "@/lib/nvms-api";
-import { useState } from "react";
+import { adminCreateCoordinatorApi, listDistrictsApi, nvmsApiEnabled, type ApiDistrict } from "@/lib/nvms-api";
+import { useEffect, useState } from "react";
 
 /** MINALOC provisions coordinators and staff — no public self-signup for these roles. UI stub until API exists. */
 function AdminInvitesPage() {
@@ -17,9 +17,18 @@ function AdminInvitesPage() {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [district, setDistrict] = useState("");
+  const [districts, setDistricts] = useState<ApiDistrict[]>([]);
   const [role, setRole] = useState<"coordinator" | "admin" | "">("");
   const [busy, setBusy] = useState(false);
   const apiOn = nvmsApiEnabled();
+
+  useEffect(() => {
+    if (!apiOn) return;
+    void (async () => {
+      const r = await listDistrictsApi();
+      if (r.ok) setDistricts(r.data);
+    })();
+  }, [apiOn]);
 
   return (
     <PortalShell role="admin">
@@ -61,7 +70,8 @@ function AdminInvitesPage() {
               const res = await adminCreateCoordinatorApi({
                 name: name.trim() || "District Coordinator",
                 email: email.trim(),
-                district: district.trim(),
+                districtId: district || undefined,
+                district: !district ? "Unassigned" : undefined,
               });
               setBusy(false);
               if (!res.ok) {
@@ -94,7 +104,14 @@ function AdminInvitesPage() {
             </div>
             <div>
               <Label htmlFor="invite-district">District</Label>
-              <Input id="invite-district" value={district} onChange={(e) => setDistrict(e.target.value)} placeholder="e.g. Gasabo" />
+              <Select value={district} onValueChange={setDistrict}>
+                <SelectTrigger id="invite-district"><SelectValue placeholder="Select district" /></SelectTrigger>
+                <SelectContent>
+                  {districts.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label>Role</Label>

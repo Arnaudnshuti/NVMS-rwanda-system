@@ -174,11 +174,33 @@ export async function submitTrustProfileApi(body: Record<string, unknown>) {
   return apiFetchJson<Record<string, unknown>>("/api/me/trust-submit", { method: "POST", json: body });
 }
 
-export async function putPlatformConfigApi(body: { volunteerCategories: string[]; programTypes: string[] }) {
-  return apiFetchJson<{ volunteerCategories: string[]; programTypes: string[] }>("/api/admin/platform-config", {
+export async function putPlatformConfigApi(body: {
+  volunteerCategories: string[];
+  programTypes: string[];
+  organizationName?: string;
+  contactEmail?: string;
+  supportPhone?: string;
+}) {
+  return apiFetchJson<{
+    volunteerCategories: string[];
+    programTypes: string[];
+    organizationName?: string;
+    contactEmail?: string;
+    supportPhone?: string;
+  }>("/api/admin/platform-config", {
     method: "PUT",
     json: body,
   });
+}
+
+export async function getPlatformConfigApi() {
+  return apiFetchJson<{
+    volunteerCategories: string[];
+    programTypes: string[];
+    organizationName?: string;
+    contactEmail?: string;
+    supportPhone?: string;
+  }>("/api/admin/platform-config");
 }
 
 export type ApiUserRow = {
@@ -204,7 +226,8 @@ export async function adminListUsersApi() {
 export async function adminCreateCoordinatorApi(body: {
   name: string;
   email: string;
-  district: string;
+  district?: string;
+  districtId?: string;
   phone?: string;
 }) {
   return apiFetchJson<{ user: ApiUserRow; temporaryPassword: string }>("/api/admin/users", {
@@ -234,6 +257,13 @@ export async function adminDeactivateUserApi(userId: string) {
   );
 }
 
+export async function adminResendInviteApi(userId: string) {
+  return apiFetchJson<{ ok: true; temporaryPassword: string }>(
+    `/api/admin/users/${encodeURIComponent(userId)}/resend-invite`,
+    { method: "PATCH" },
+  );
+}
+
 export type ApiAuditLogRow = {
   id: string;
   actionType: string;
@@ -248,6 +278,29 @@ export type ApiAuditLogRow = {
 export async function adminListAuditLogsApi(q?: string) {
   const qs = q ? `?q=${encodeURIComponent(q)}` : "";
   return apiFetchJson<ApiAuditLogRow[]>(`/api/admin/audit-logs${qs}`);
+}
+
+export type ApiReportSummary = {
+  generatedAt: string;
+  metrics: Record<string, number>;
+  byDistrict: Array<{ district: string; volunteers: number }>;
+};
+export async function adminReportSummaryApi() {
+  return apiFetchJson<ApiReportSummary>("/api/admin/reports/summary");
+}
+
+export async function adminDownloadReportApi(format: "csv" | "xlsx" | "pdf" | "docx") {
+  const token = getAccessToken();
+  const url = `${nvmsApiUrl}/api/admin/reports/export?format=${encodeURIComponent(format)}`;
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    return { ok: false as const, error: txt || `Download failed (${res.status})` };
+  }
+  const blob = await res.blob();
+  return { ok: true as const, blob };
 }
 
 export type ApiCoordinatorVolunteerRow = {
@@ -275,6 +328,36 @@ export async function coordinatorPatchVolunteerVerificationApi(
 ) {
   return apiFetchJson<ApiCoordinatorVolunteerRow>(`/api/coordinator/volunteers/${encodeURIComponent(userId)}/verification`, {
     method: "PATCH",
+    json: body,
+  });
+}
+
+export type ApiDeployment = {
+  id: string;
+  volunteerId: string;
+  volunteerName: string;
+  volunteerEmail: string;
+  volunteerDistrict?: string | null;
+  programId: string;
+  programTitle: string;
+  district: string;
+  startDate: string;
+  endDate: string;
+  status: "active" | "completed" | "upcoming";
+  hoursLogged: number;
+  strikes: number;
+};
+export async function coordinatorListDeploymentsApi() {
+  return apiFetchJson<ApiDeployment[]>("/api/coordinator/deployments");
+}
+export async function coordinatorAssignVolunteerApi(body: {
+  programId: string;
+  volunteerId: string;
+  startDate?: string;
+  endDate?: string;
+}) {
+  return apiFetchJson<{ id: string; message: string }>("/api/coordinator/deployments/assign", {
+    method: "POST",
     json: body,
   });
 }

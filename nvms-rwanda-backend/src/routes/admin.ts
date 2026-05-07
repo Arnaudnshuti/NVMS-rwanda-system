@@ -6,6 +6,9 @@ import { hashPassword } from "../services/auth.service.js";
 import { writeAudit } from "../services/audit.service.js";
 import { sendTemplatedEmail } from "../services/email/mailer.js";
 import { createNotification } from "../services/notification.service.js";
+import ExcelJS from "exceljs";
+import PDFDocument from "pdfkit";
+import { Document, Packer, Paragraph, TextRun } from "docx";
 
 export const adminRouter = Router();
 
@@ -170,12 +173,18 @@ adminRouter.get("/platform-config", async (_req, res) => {
   res.json({
     volunteerCategories: row.volunteerCategories as string[],
     programTypes: row.programTypes as string[],
+    organizationName: row.organizationName ?? "Ministry of Local Government — Rwanda",
+    contactEmail: row.contactEmail ?? "volunteer@minaloc.gov.rw",
+    supportPhone: row.supportPhone ?? "+250 788 000 000",
   });
 });
 
 const platformSchema = z.object({
   volunteerCategories: z.array(z.string()),
   programTypes: z.array(z.string()),
+  organizationName: z.string().optional(),
+  contactEmail: z.string().optional(),
+  supportPhone: z.string().optional(),
 });
 
 adminRouter.put("/platform-config", async (req: AuthRequest, res) => {
@@ -188,17 +197,150 @@ adminRouter.put("/platform-config", async (req: AuthRequest, res) => {
       id: 1,
       volunteerCategories: parsed.data.volunteerCategories.filter(Boolean),
       programTypes: parsed.data.programTypes.filter(Boolean),
+      organizationName: parsed.data.organizationName,
+      contactEmail: parsed.data.contactEmail,
+      supportPhone: parsed.data.supportPhone,
     },
     update: {
       volunteerCategories: parsed.data.volunteerCategories.filter(Boolean),
       programTypes: parsed.data.programTypes.filter(Boolean),
+      organizationName: parsed.data.organizationName,
+      contactEmail: parsed.data.contactEmail,
+      supportPhone: parsed.data.supportPhone,
     },
   });
 
   res.json({
     volunteerCategories: row.volunteerCategories as string[],
     programTypes: row.programTypes as string[],
+    organizationName: row.organizationName ?? undefined,
+    contactEmail: row.contactEmail ?? undefined,
+    supportPhone: row.supportPhone ?? undefined,
   });
+});
+
+adminRouter.patch("/users/:userId/resend-invite", async (req: AuthRequest, res) => {
+  const target = await prisma.user.findUnique({ where: { id: req.params.userId } });
+  if (!target || target.role !== "coordinator") return res.status(404).json({ error: "Coordinator not found" });
+  const temporaryPassword = generateTemporaryPassword();
+  const passwordHash = await hashPassword(temporaryPassword);
+  await prisma.user.update({
+    where: { id: target.id },
+    data: { passwordHash, mustChangePassword: true, isActive: true, govStatus: "active" },
+  });
+  const link = process.env.SYSTEM_LOGIN_LINK ?? "http://localhost:5173/login";
+  await sendTemplatedEmail({
+    templateId: "coordinator_invite",
+    to: target.email,
+    actorUserId: req.userId,
+    targetUserId: target.id,
+    vars: {
+      name: target.name,
+      email: target.email,
+      password: temporaryPassword,
+      link,
+      role: "coordinator",
+      district: target.district ?? "",
+    },
+  });
+  await createNotification({
+    userId: target.id,
+    type: "INFO",
+    title: "Invitation re-sent",
+    message: "Admin re-sent temporary credentials. Please sign in and change password immediately.",
+    metadata: { resentBy: req.userId },
+  });
+  res.json({ ok: true, temporaryPassword });
+});
+
+adminRouter.get("/reports/summary", async (_req, res) => {
+  const [totalUsers, volunteers, coordinators, admins, pendingVolunteers, programs, activePrograms, apps, logs] =
+    await Promise.all([
+      prisma.user.count(),
+      prisma.user.count({ where: { role: "volunteer" } }),
+      prisma.user.count({ where: { role: "coordinator" } }),
+      prisma.user.count({ where: { role: "admin" } }),
+      prisma.user.count({ where: { role: "volunteer", verificationStatus: "pending" } }),
+      prisma.program.count(),
+      prisma.program.count({ where: { status: { in: ["open", "in_progress"] } } }),
+      prisma.programApplication.count(),
+      prisma.activityLog.count(),
+    ]);
+  const byDistrict = await prisma.user.groupBy({
+    by: ["district"],
+    where: { role: "volunteer" },
+    _count: { _all: true },
+  });
+  res.json({
+    generatedAt: new Date().toISOString(),
+    metrics: { totalUsers, volunteers, coordinators, admins, pendingVolunteers, programs, activePrograms, applications: apps, activityLogs: logs },
+    byDistrict: byDistrict.map((d) => ({ district: d.district ?? "Unassigned", volunteers: d._count._all })),
+  });
+});
+
+adminRouter.get("/reports/export", async (req, res) => {
+  const format = String(req.query.format ?? "csv").toLowerCase();
+  const data = await prisma.programApplication.findMany({
+    orderBy: { submittedAt: "desc" },
+    include: { volunteer: { select: { name: true, email: true, district: true } }, program: { select: { title: true, district: true } } },
+    take: 5000,
+  });
+  const rows = data.map((r) => ({
+    applicationId: r.id,
+    submittedAt: r.submittedAt.toISOString(),
+    status: r.status,
+    volunteerName: r.volunteer.name,
+    volunteerEmail: r.volunteer.email,
+    volunteerDistrict: r.volunteer.district ?? "",
+    programTitle: r.program.title,
+    programDistrict: r.program.district,
+  }));
+
+  if (format === "xlsx") {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Applications");
+    ws.columns = Object.keys(rows[0] ?? { applicationId: "" }).map((k) => ({ header: k, key: k }));
+    rows.forEach((r) => ws.addRow(r));
+    const buf = await wb.xlsx.writeBuffer();
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", 'attachment; filename="nvms-report.xlsx"');
+    return res.send(Buffer.from(buf));
+  }
+  if (format === "pdf") {
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'attachment; filename="nvms-report.pdf"');
+    const doc = new PDFDocument({ margin: 40 });
+    doc.pipe(res);
+    doc.fontSize(16).text("NVMS Applications Report");
+    doc.moveDown();
+    rows.slice(0, 200).forEach((r) => {
+      doc.fontSize(10).text(`${r.submittedAt} | ${r.status} | ${r.volunteerName} | ${r.programTitle}`);
+    });
+    doc.end();
+    return;
+  }
+  if (format === "docx") {
+    const doc = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({ children: [new TextRun({ text: "NVMS Applications Report", bold: true, size: 32 })] }),
+            ...rows.slice(0, 300).map((r) => new Paragraph(`${r.submittedAt} | ${r.status} | ${r.volunteerName} | ${r.programTitle}`)),
+          ],
+        },
+      ],
+    });
+    const buf = await Packer.toBuffer(doc);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader("Content-Disposition", 'attachment; filename="nvms-report.docx"');
+    return res.send(buf);
+  }
+  // default csv (excel-compatible)
+  const header = Object.keys(rows[0] ?? {});
+  const csv = [header.join(","), ...rows.map((r) => header.map((h) => JSON.stringify((r as Record<string, unknown>)[h] ?? "")).join(","))].join("\n");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="nvms-report.csv"');
+  return res.send(csv);
 });
 
 const govSchema = z.object({

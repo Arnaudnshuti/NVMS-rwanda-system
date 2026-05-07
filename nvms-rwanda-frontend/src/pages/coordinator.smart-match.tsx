@@ -12,10 +12,12 @@ import { PROGRAMS, SMART_MATCHES, VOLUNTEERS } from "@/lib/mock-data";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { programsVisibleToCoordinator } from "@/lib/portal-access";
+import { useNavigate } from "react-router-dom";
 
 
 function SmartMatchPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const visiblePrograms = useMemo(() => programsVisibleToCoordinator(user, PROGRAMS), [user]);
   const [programId, setProgramId] = useState("");
   const [running, setRunning] = useState(false);
@@ -116,8 +118,8 @@ function SmartMatchPage() {
                         <p className="mt-0.5 text-xs text-muted-foreground">{v.district} · {v.hoursContributed}h · ⭐ {v.rating.toFixed(1)}</p>
                         <p className="mt-2 rounded-md bg-muted/50 p-2 text-xs italic text-muted-foreground">"{r.reason}"</p>
                         <div className="mt-3 flex gap-2">
-                          <Button size="sm" onClick={() => toast.success(`${v.name} assigned`)}>Assign</Button>
-                          <Button size="sm" variant="outline">View profile</Button>
+                          <Button size="sm" onClick={() => toast.success(`${v.name} assignment queued. Use Deployments to finalize.`)}>Assign</Button>
+                          <Button size="sm" variant="outline" onClick={() => navigate("/coordinator/volunteers")}>View profile</Button>
                         </div>
                       </div>
                     </div>

@@ -197,6 +197,7 @@ model Assignment {
   endDate      DateTime
   status       AssignmentStatus
   hoursLogged  Int              @default(0)
+  strikes      Int              @default(0)
 
   @@index([volunteerId])
 }
@@ -232,6 +233,9 @@ model PlatformConfig {
   id                  Int    @id @default(1)
   volunteerCategories Json
   programTypes        Json
+  organizationName    String?
+  contactEmail        String?
+  supportPhone        String?
 }
 
 enum AuditActionType {

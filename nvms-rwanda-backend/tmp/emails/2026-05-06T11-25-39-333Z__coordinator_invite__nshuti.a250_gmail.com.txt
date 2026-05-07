@@ -1,0 +1,20 @@
+TO: nshuti.a250@gmail.com
+SUBJECT: NVMS Rwanda — Coordinator invitation
+
+Hello TEST,
+
+You have been invited as a District Coordinator on the National Volunteer Management System (NVMS Rwanda).
+
+Login credentials (temporary):
+- Email: nshuti.a250@gmail.com
+- Password: NVMS-bacagc-8927
+
+Login link: http://localhost:5173/login
+
+Security warning:
+You must change this password immediately after your first login. Do not share credentials.
+
+Role: coordinator
+District: Gasabo
+
+— MINALOC (Republic of Rwanda)

@@ -7,6 +7,7 @@ import { requireAuth, type AuthRequest } from "../middlewares/auth.middleware.js
 import { writeAudit } from "../services/audit.service.js";
 import { sendTemplatedEmail } from "../services/email/mailer.js";
 import { createNotification } from "../services/notification.service.js";
+import { validateBirthDate, validateRwandaPhone } from "../utils/validation.js";
 
 export const authRouter = Router();
 
@@ -34,8 +35,12 @@ authRouter.post("/register", async (req, res) => {
     return res.status(409).json({ error: "An account with this email already exists." });
   }
 
+  const dobCheck = validateBirthDate(body.dateOfBirth);
+  if (!dobCheck.ok) return res.status(400).json({ error: dobCheck.error });
+  const phoneCheck = validateRwandaPhone(body.phone);
+  if (!phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
+
   const passwordHash = await hashPassword(body.password);
-  const dob = body.dateOfBirth ? new Date(body.dateOfBirth) : undefined;
   let districtId: string | undefined = undefined;
   let districtName: string | undefined = body.district?.trim();
   if (body.districtId) {
@@ -43,6 +48,9 @@ authRouter.post("/register", async (req, res) => {
     if (!d || !d.isActive) return res.status(400).json({ error: "Invalid districtId" });
     districtId = d.id;
     districtName = d.name;
+  } else if (districtName) {
+    const d = await prisma.district.findUnique({ where: { name: districtName } });
+    if (d?.isActive) districtId = d.id;
   }
 
   const user = await prisma.user.create({
@@ -55,11 +63,11 @@ authRouter.post("/register", async (req, res) => {
       mustChangePassword: false,
       district: districtName,
       districtId,
-      phone: body.phone.trim(),
+      phone: phoneCheck.value,
       verificationStatus: "pending",
       profileTrustStatus: "unsubmitted",
       contactPreference: body.contactPreference,
-      dateOfBirth: dob && !Number.isNaN(dob.getTime()) ? dob : undefined,
+      dateOfBirth: dobCheck.value,
       profession: body.profession?.trim(),
       educationLevel: body.educationLevel?.trim(),
       skills: [],

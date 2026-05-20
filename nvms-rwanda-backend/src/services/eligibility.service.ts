@@ -7,7 +7,6 @@ export function volunteerEligibleToApply(user: User): boolean {
   if (user.profileTrustStatus !== "verified") return false;
   if (!user.phone?.trim()) return false;
   if (!user.skills?.length && !user.trustSkillsSummary?.trim()) return false;
-  if (!user.volunteerAvailability?.trim()) return false;
   if (!user.profession?.trim() || !user.educationLevel?.trim()) return false;
   return true;
 }
@@ -18,7 +17,6 @@ export function eligibilityReason(user: User): string | null {
   if (user.profileTrustStatus !== "verified") return "Complete Identity & trust (KYC) and coordinator approval.";
   if (!user.phone?.trim()) return "Add a phone number on your profile.";
   if (!user.skills?.length && !user.trustSkillsSummary?.trim()) return "Add skills on your profile.";
-  if (!user.volunteerAvailability?.trim()) return "Set your availability.";
   if (!user.profession?.trim() || !user.educationLevel?.trim()) return "Add profession and education.";
   return "Not eligible to apply.";
 }

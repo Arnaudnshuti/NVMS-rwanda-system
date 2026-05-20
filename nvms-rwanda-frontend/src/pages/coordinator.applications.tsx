@@ -4,10 +4,7 @@ import { PageHeader } from "@/components/DashboardUI";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useAuth } from "@/lib/auth";
-import { programsVisibleToCoordinator } from "@/lib/portal-access";
 import type { Program } from "@/lib/mock-data";
-import { PROGRAMS } from "@/lib/mock-data";
 import {
   applicationsForCoordinatorPrograms,
   patchApplicationStatus,
@@ -15,7 +12,7 @@ import {
 } from "@/lib/program-applications";
 import {
   nvmsApiEnabled,
-  fetchProgramsFromApi,
+  fetchAdminProgramsFromApi,
   fetchMyApplicationsFromApi,
   patchApplicationApi,
 } from "@/lib/nvms-api";
@@ -25,13 +22,9 @@ import { toast } from "sonner";
 const decisionOptions: ApplicationStatus[] = ["submitted", "under_review", "accepted", "waitlisted", "rejected"];
 
 export default function CoordinatorApplicationsPage() {
-  const { user } = useAuth();
-  const visible = programsVisibleToCoordinator(user, PROGRAMS);
-  const programIds = visible.map((p) => p.id);
-
   const [version, setVersion] = useState(0);
   const bump = () => setVersion((n) => n + 1);
-  const [programCatalog, setProgramCatalog] = useState<Program[]>(PROGRAMS);
+  const [programCatalog, setProgramCatalog] = useState<Program[]>([]);
   const [remoteApps, setRemoteApps] = useState<ReturnType<typeof applicationsForCoordinatorPrograms> | null>(null);
 
   useEffect(() => {
@@ -42,7 +35,7 @@ export default function CoordinatorApplicationsPage() {
     let cancelled = false;
     void (async () => {
       try {
-        const [apps, progs] = await Promise.all([fetchMyApplicationsFromApi(), fetchProgramsFromApi()]);
+        const [apps, progs] = await Promise.all([fetchMyApplicationsFromApi(), fetchAdminProgramsFromApi()]);
         if (!cancelled) {
           setRemoteApps(apps);
           setProgramCatalog(progs);
@@ -58,8 +51,9 @@ export default function CoordinatorApplicationsPage() {
 
   const apps = useMemo(() => {
     if (nvmsApiEnabled()) return (remoteApps ?? []).filter((a) => a.status !== "withdrawn");
+    const programIds = programCatalog.map((p) => p.id);
     return applicationsForCoordinatorPrograms(programIds).filter((a) => a.status !== "withdrawn");
-  }, [programIds.join(","), version, remoteApps]);
+  }, [programCatalog, version, remoteApps]);
 
   const programTitle = (id: string) => programCatalog.find((p) => p.id === id)?.title ?? id;
 
@@ -85,7 +79,7 @@ export default function CoordinatorApplicationsPage() {
     <PortalShell role="coordinator">
       <PageHeader
         title="Program applications"
-        description="Review volunteer applications for programs running in your district."
+        description="Accepting an application automatically creates the volunteer assignment. Use Smart Match when you need help ranking applicants."
       />
       <Card>
         <CardContent className="p-0">

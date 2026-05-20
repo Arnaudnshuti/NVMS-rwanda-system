@@ -4,8 +4,10 @@ import { prisma } from "../services/prisma.service.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.middleware.js";
 import { serializeUserWithDocs } from "../services/user.service.js";
 import multer from "multer";
+import PDFDocument from "pdfkit";
 import { ensureUploadsDir, makeSafeFileName, publicUploadUrl, uploadsDir } from "../services/uploads.service.js";
 import { createNotification } from "../services/notification.service.js";
+import { validateRwandaNationalId, validateRwandaPhone } from "../utils/validation.js";
 
 export const meRouter = Router();
 
@@ -106,6 +108,10 @@ meRouter.patch("/profile", async (req: AuthRequest, res) => {
   }
 
   const b = parsed.data;
+  const nationalIdCheck = b.nationalId ? validateRwandaNationalId(b.nationalId, user.dateOfBirth) : null;
+  if (nationalIdCheck && !nationalIdCheck.ok) return res.status(400).json({ error: nationalIdCheck.error });
+  const phoneCheck = b.phone ? validateRwandaPhone(b.phone) : null;
+  if (phoneCheck && !phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
   const skillsFromSummary =
     b.trustSkillsSummary
       ?.split(/[,;\n]/)
@@ -118,10 +124,10 @@ meRouter.patch("/profile", async (req: AuthRequest, res) => {
       ...(b.volunteerAvailability !== undefined ? { volunteerAvailability: b.volunteerAvailability } : {}),
       ...(b.profession !== undefined ? { profession: b.profession } : {}),
       ...(b.educationLevel !== undefined ? { educationLevel: b.educationLevel } : {}),
-      ...(b.nationalId !== undefined ? { nationalId: b.nationalId } : {}),
+      ...(b.nationalId !== undefined ? { nationalId: nationalIdCheck?.value ?? "" } : {}),
       ...(b.trustSkillsSummary !== undefined ? { trustSkillsSummary: b.trustSkillsSummary } : {}),
       ...(skillsFromSummary !== undefined ? { skills: skillsFromSummary } : {}),
-      ...(b.phone !== undefined ? { phone: b.phone } : {}),
+      ...(b.phone !== undefined ? { phone: phoneCheck?.value ?? "" } : {}),
     },
   });
 
@@ -135,7 +141,7 @@ const trustSchema = z.object({
   trustSkillsSummary: z.string().min(1),
   profession: z.string().min(1),
   educationLevel: z.string().min(1),
-  identityDocuments: z.array(z.object({ label: z.string(), fileName: z.string() })),
+  identityDocuments: z.array(z.object({ id: z.string().optional(), label: z.string(), fileName: z.string() })),
 });
 
 meRouter.post("/trust-submit", async (req: AuthRequest, res) => {
@@ -149,30 +155,65 @@ meRouter.post("/trust-submit", async (req: AuthRequest, res) => {
   if (user.verificationStatus !== "verified") {
     return res.status(403).json({ error: "Account must be approved before KYC submission." });
   }
-  if (user.profileTrustStatus === "pending_review" || user.profileTrustStatus === "verified") {
+  if (user.profileTrustStatus === "verified") {
     return res.status(400).json({ error: "Trust profile already submitted or verified." });
   }
+  if (user.profileTrustStatus === "pending_review") {
+    const existingDocs = await prisma.identityDocument.findMany({
+      where: { userId: user.id },
+      select: { storageKey: true },
+    });
+    if (existingDocs.some((d) => d.storageKey)) {
+      return res.status(400).json({ error: "Trust profile already submitted or verified." });
+    }
+  }
+  const nationalIdCheck = validateRwandaNationalId(parsed.data.nationalId, user.dateOfBirth);
+  if (!nationalIdCheck.ok) return res.status(400).json({ error: nationalIdCheck.error });
+  const phoneCheck = validateRwandaPhone(parsed.data.emergencyContactPhone);
+  if (!phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
 
   const skills = parsed.data.trustSkillsSummary
     .split(/[,;\n]/)
     .map((s) => s.trim())
     .filter(Boolean);
+  const uploadedDocumentIds = parsed.data.identityDocuments
+    .map((d) => d.id)
+    .filter((id): id is string => Boolean(id));
+  const metadataOnlyDocuments = parsed.data.identityDocuments.filter((d) => !d.id);
+
+  if (uploadedDocumentIds.length) {
+    const ownedUploads = await prisma.identityDocument.count({
+      where: { userId: user.id, id: { in: uploadedDocumentIds } },
+    });
+    if (ownedUploads !== uploadedDocumentIds.length) {
+      return res.status(400).json({ error: "One or more uploaded documents could not be found." });
+    }
+  }
 
   await prisma.$transaction([
-    prisma.identityDocument.deleteMany({ where: { userId: user.id } }),
-    prisma.identityDocument.createMany({
-      data: parsed.data.identityDocuments.map((d) => ({
+    prisma.identityDocument.deleteMany({
+      where: {
         userId: user.id,
-        label: d.label,
-        fileName: d.fileName,
-      })),
+        ...(uploadedDocumentIds.length ? { id: { notIn: uploadedDocumentIds } } : {}),
+      },
     }),
+    ...(metadataOnlyDocuments.length
+      ? [
+          prisma.identityDocument.createMany({
+            data: metadataOnlyDocuments.map((d) => ({
+              userId: user.id,
+              label: d.label,
+              fileName: d.fileName,
+            })),
+          }),
+        ]
+      : []),
     prisma.user.update({
       where: { id: user.id },
       data: {
-        nationalId: parsed.data.nationalId,
+        nationalId: nationalIdCheck.value,
         emergencyContactName: parsed.data.emergencyContactName,
-        emergencyContactPhone: parsed.data.emergencyContactPhone,
+        emergencyContactPhone: phoneCheck.value,
         trustSkillsSummary: parsed.data.trustSkillsSummary,
         profession: parsed.data.profession,
         educationLevel: parsed.data.educationLevel,
@@ -206,12 +247,120 @@ meRouter.get("/assignments", async (req: AuthRequest, res) => {
   );
 });
 
+async function buildMyCertificates(userId: string) {
+  const assignments = await prisma.assignment.findMany({
+    where: { volunteerId: userId },
+    orderBy: { endDate: "desc" },
+    include: {
+      volunteer: { select: { name: true, email: true, district: true, govStatus: true } },
+      program: {
+        select: {
+          title: true,
+          district: true,
+          status: true,
+          activityLogs: {
+            where: { volunteerId: userId, status: "approved" },
+            select: { date: true, hours: true },
+            orderBy: { date: "desc" },
+          },
+        },
+      },
+    },
+  });
+
+  const certificates = assignments
+    .map((a) => {
+      const approvedHours = a.program.activityLogs.reduce((sum, l) => sum + Number(l.hours), 0);
+      const latestApprovedLog = a.program.activityLogs[0]?.date;
+      return {
+        id: a.id,
+        assignmentId: a.id,
+        volunteerName: a.volunteer.name,
+        volunteerEmail: a.volunteer.email,
+        volunteerDistrict: a.volunteer.district ?? a.district,
+        programId: a.programId,
+        programTitle: a.programTitle,
+        programDistrict: a.program.district,
+        hoursServed: Math.round(approvedHours),
+        startDate: a.startDate.toISOString().slice(0, 10),
+        endDate: a.endDate.toISOString().slice(0, 10),
+        issuedAt: (latestApprovedLog ?? a.endDate).toISOString().slice(0, 10),
+        signedBy: a.program.district ? `${a.program.district} District / MINALOC` : "Ministry of Local Government",
+        status: approvedHours > 0 ? "issued" : "not_eligible",
+        reason:
+          approvedHours > 0
+            ? "Approved field report hours are recorded for this assignment."
+            : "No approved field report hours recorded yet.",
+      };
+    });
+
+  const issued = certificates.filter((c) => c.status === "issued");
+  const volunteer = assignments[0]?.volunteer ?? (await prisma.user.findUnique({ where: { id: userId }, select: { govStatus: true } }));
+  return {
+    generatedAt: new Date().toISOString(),
+    policy: {
+      ministryCertificateThreshold: 3,
+      requiresApprovedReports: true,
+      requiresNoActiveSanctions: true,
+    },
+    eligibleForMinistryCertificate: issued.length >= 3 && volunteer?.govStatus === "active",
+    completedEligibleCount: issued.length,
+    certificates,
+  };
+}
+
+meRouter.get("/certificates", async (req: AuthRequest, res) => {
+  res.json(await buildMyCertificates(req.userId!));
+});
+
+meRouter.get("/certificates/:assignmentId/pdf", async (req: AuthRequest, res) => {
+  const report = await buildMyCertificates(req.userId!);
+  const cert = report.certificates.find((c) => c.assignmentId === req.params.assignmentId);
+  if (!cert) return res.status(404).json({ error: "Certificate not found" });
+  if (cert.status !== "issued") return res.status(400).json({ error: cert.reason });
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="nvms-certificate-${cert.assignmentId}.pdf"`);
+
+  const doc = new PDFDocument({ margin: 56, size: "A4" });
+  doc.pipe(res);
+  const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+
+  doc.rect(0, 0, doc.page.width, doc.page.height).fill("#f8fafc");
+  doc.roundedRect(42, 42, doc.page.width - 84, doc.page.height - 84, 12).fillAndStroke("#ffffff", "#0f766e");
+  doc.fillColor("#0f766e").font("Helvetica-Bold").fontSize(18).text("NVMS Rwanda", 56, 78, { align: "center", width });
+  doc.fillColor("#111827").fontSize(28).text("Certificate of Service", 56, 135, { align: "center", width });
+  doc.moveDown(1.5);
+  doc.font("Helvetica").fontSize(12).fillColor("#475569").text("This certificate is awarded to", { align: "center", width });
+  doc.moveDown(0.5);
+  doc.font("Helvetica-Bold").fontSize(24).fillColor("#111827").text(cert.volunteerName, { align: "center", width });
+  doc.moveDown(1);
+  doc.font("Helvetica").fontSize(12).fillColor("#475569").text("for verified volunteer service on", { align: "center", width });
+  doc.moveDown(0.5);
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#111827").text(cert.programTitle, { align: "center", width });
+  doc.moveDown(1.2);
+  doc.font("Helvetica").fontSize(11).fillColor("#334155").text(
+    `${cert.hoursServed} approved hour(s), served in ${cert.programDistrict} from ${cert.startDate} to ${cert.endDate}.`,
+    { align: "center", width },
+  );
+  doc.moveDown(2);
+  doc.fontSize(10).fillColor("#64748b").text(`Issued: ${cert.issuedAt}`, { align: "center", width });
+  doc.text(`Signed by: ${cert.signedBy}`, { align: "center", width });
+  doc.text(`Verification ID: ${cert.assignmentId}`, { align: "center", width });
+  doc.fontSize(8).fillColor("#64748b").text("Generated from NVMS live assignment and approved activity report records.", 56, 760, {
+    align: "center",
+    width,
+  });
+  doc.end();
+});
+
 meRouter.get("/activity-logs", async (req: AuthRequest, res) => {
   const list = await prisma.activityLog.findMany({
     where: { volunteerId: req.userId! },
     orderBy: { date: "desc" },
     take: 100,
     include: {
+      program: { select: { title: true, district: true } },
       attachments: {
         select: { id: true, fileName: true, storageKey: true, contentType: true },
         orderBy: { createdAt: "asc" },
@@ -223,6 +372,8 @@ meRouter.get("/activity-logs", async (req: AuthRequest, res) => {
       id: l.id,
       volunteerId: l.volunteerId,
       programId: l.programId,
+      programTitle: l.program.title,
+      programDistrict: l.program.district,
       date: l.date.toISOString().slice(0, 10),
       hours: Number(l.hours),
       description: l.description,

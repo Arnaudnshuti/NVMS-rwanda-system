@@ -14,7 +14,7 @@ function serializeProgram(p) {
         startDate: p.startDate.toISOString().slice(0, 10),
         endDate: p.endDate.toISOString().slice(0, 10),
         slotsTotal: p.slotsTotal,
-        slotsFilled: p.slotsFilled,
+        slotsFilled: p._count?.applications ?? p._count?.assignments ?? p.slotsFilled,
         requiredSkills: p.requiredSkills,
         status: p.status,
         coordinator: p.coordinatorDisplayName ?? "",
@@ -37,14 +37,29 @@ programsRouter.get("/", async (req, res) => {
                 : {}),
             ...(district && district !== "all" ? { district } : {}),
             ...(category && category !== "all" ? { category } : {}),
-            ...(status ? { status: status } : {}),
+            ...(status && status !== "draft" ? { status: status } : { status: { not: "draft" } }),
         },
         orderBy: { startDate: "asc" },
+        include: { _count: { select: { applications: true, assignments: true } } },
+    });
+    res.json(programs.map(serializeProgram));
+});
+programsRouter.get("/admin/all", requireAuth, requireRoles("admin", "coordinator"), async (req, res) => {
+    const me = await prisma.user.findUnique({ where: { id: req.userId } });
+    if (!me)
+        return res.status(401).json({ error: "Unauthorized" });
+    const programs = await prisma.program.findMany({
+        where: me.role === "coordinator" && me.district ? { district: me.district } : undefined,
+        orderBy: [{ status: "asc" }, { startDate: "asc" }],
+        include: { _count: { select: { applications: true, assignments: true } } },
     });
     res.json(programs.map(serializeProgram));
 });
 programsRouter.get("/:id", async (req, res) => {
-    const p = await prisma.program.findUnique({ where: { id: req.params.id } });
+    const p = await prisma.program.findUnique({
+        where: { id: req.params.id },
+        include: { _count: { select: { applications: true, assignments: true } } },
+    });
     if (!p)
         return res.status(404).json({ error: "Program not found" });
     res.json(serializeProgram(p));
@@ -123,13 +138,25 @@ programsRouter.patch("/:id", requireAuth, requireRoles("admin", "coordinator"), 
         return res.status(403).json({ error: "Forbidden" });
     }
     const b = partial.data;
+    let districtName = b.district;
+    let districtId = b.districtId;
+    if (districtId) {
+        const d = await prisma.district.findUnique({ where: { id: districtId } });
+        if (!d || !d.isActive)
+            return res.status(400).json({ error: "Invalid districtId" });
+        districtName = d.name;
+    }
+    if (me.role === "coordinator" && districtName && districtName !== me.district) {
+        return res.status(403).json({ error: "Coordinators may only manage programs in their district." });
+    }
     const program = await prisma.program.update({
         where: { id: req.params.id },
         data: {
             ...(b.title !== undefined ? { title: b.title } : {}),
             ...(b.description !== undefined ? { description: b.description } : {}),
             ...(b.category !== undefined ? { category: b.category } : {}),
-            ...(b.district !== undefined ? { district: b.district } : {}),
+            ...(districtName !== undefined ? { district: districtName } : {}),
+            ...(districtId !== undefined ? { districtId } : {}),
             ...(b.sector !== undefined ? { sector: b.sector } : {}),
             ...(b.startDate !== undefined ? { startDate: new Date(b.startDate) } : {}),
             ...(b.endDate !== undefined ? { endDate: new Date(b.endDate) } : {}),
@@ -141,4 +168,28 @@ programsRouter.patch("/:id", requireAuth, requireRoles("admin", "coordinator"), 
         },
     });
     res.json(serializeProgram(program));
+});
+programsRouter.delete("/:id", requireAuth, requireRoles("admin", "coordinator"), async (req, res) => {
+    const existing = await prisma.program.findUnique({ where: { id: req.params.id } });
+    if (!existing)
+        return res.status(404).json({ error: "Not found" });
+    const me = await prisma.user.findUnique({ where: { id: req.userId } });
+    if (!me)
+        return res.status(401).json({ error: "Unauthorized" });
+    if (me.role === "coordinator" && existing.district !== me.district) {
+        return res.status(403).json({ error: "Forbidden" });
+    }
+    const logs = await prisma.activityLog.findMany({
+        where: { programId: existing.id },
+        select: { id: true },
+    });
+    const logIds = logs.map((l) => l.id);
+    await prisma.$transaction([
+        ...(logIds.length ? [prisma.activityAttachment.deleteMany({ where: { activityLogId: { in: logIds } } })] : []),
+        prisma.activityLog.deleteMany({ where: { programId: existing.id } }),
+        prisma.assignment.deleteMany({ where: { programId: existing.id } }),
+        prisma.programApplication.deleteMany({ where: { programId: existing.id } }),
+        prisma.program.delete({ where: { id: existing.id } }),
+    ]);
+    res.json({ ok: true });
 });

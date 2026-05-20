@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { PortalShell } from "@/components/PortalShell";
 import { PageHeader } from "@/components/DashboardUI";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,21 +8,36 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
-import { Sparkles, Loader2 } from "lucide-react";
-import { PROGRAMS, SMART_MATCHES, VOLUNTEERS } from "@/lib/mock-data";
+import { Sparkles, Loader2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
-import { useAuth } from "@/lib/auth";
-import { programsVisibleToCoordinator } from "@/lib/portal-access";
-import { useNavigate } from "react-router-dom";
+import {
+  coordinatorSmartMatchApi,
+  fetchAdminProgramsFromApi,
+  patchApplicationApi,
+  type ApiSmartMatch,
+} from "@/lib/nvms-api";
 
+type ProgramOption = {
+  id: string;
+  title: string;
+  district: string;
+  requiredSkills: string[];
+  slotsFilled: number;
+  slotsTotal: number;
+};
 
 function SmartMatchPage() {
-  const { user } = useAuth();
   const navigate = useNavigate();
-  const visiblePrograms = useMemo(() => programsVisibleToCoordinator(user, PROGRAMS), [user]);
+  const [programs, setPrograms] = useState<ProgramOption[]>([]);
+  const visiblePrograms = useMemo(() => programs, [programs]);
   const [programId, setProgramId] = useState("");
   const [running, setRunning] = useState(false);
-  const [results, setResults] = useState<typeof SMART_MATCHES | null>(null);
+  const [assigningId, setAssigningId] = useState("");
+  const [results, setResults] = useState<ApiSmartMatch[] | null>(null);
+
+  useEffect(() => {
+    void fetchAdminProgramsFromApi().then(setPrograms).catch(() => toast.error("Could not load programs"));
+  }, []);
 
   useEffect(() => {
     if (!visiblePrograms.length) return;
@@ -32,20 +48,49 @@ function SmartMatchPage() {
 
   const program = visiblePrograms.find((p) => p.id === programId);
 
-  const runMatch = () => {
-    setRunning(true);
+  useEffect(() => {
     setResults(null);
-    setTimeout(() => {
+  }, [programId]);
+
+  const runMatch = () => {
+    void (async () => {
+      setRunning(true);
+      setResults(null);
+      const r = await coordinatorSmartMatchApi(programId);
       setRunning(false);
-      setResults(SMART_MATCHES);
-      toast.success("AI generated 3 high-match candidates");
-    }, 1400);
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      setResults(r.data);
+      toast.success(`Generated ${r.data.length} ranked candidates`);
+    })();
+  };
+
+  const acceptAndAssign = (candidate: ApiSmartMatch) => {
+    void (async () => {
+      if (!candidate.applicationId) {
+        toast.error("This match has no application to accept.");
+        return;
+      }
+      setAssigningId(candidate.volunteerId);
+      const r = await patchApplicationApi(candidate.applicationId, { status: "accepted" });
+      setAssigningId("");
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      setResults((current) => current?.filter((row) => row.volunteerId !== candidate.volunteerId) ?? null);
+      toast.success(`${candidate.volunteerName} accepted and assigned`, {
+        description: "The accepted application now appears as an assignment in Deployments.",
+      });
+    })();
   };
 
   if (!program) {
     return (
       <PortalShell role="coordinator">
-        <PageHeader title="Smart Match" description="AI-powered volunteer matching by skills, district and availability." />
+        <PageHeader title="Smart Match" description="Rank program applicants by skills, district, availability, and service history." />
         <p className="text-sm text-muted-foreground">No programs in your assigned districts. Adjust scope or create a program first.</p>
       </PortalShell>
     );
@@ -53,11 +98,11 @@ function SmartMatchPage() {
 
   return (
     <PortalShell role="coordinator">
-      <PageHeader title="Smart Match" description="AI-powered volunteer matching by skills, district and availability." />
+      <PageHeader title="Smart Match" description="Rank applicants for a program, then accept one to create the assignment." />
 
       <Card className="border-accent/30 bg-gradient-to-br from-accent/5 to-transparent">
         <CardContent className="flex flex-wrap items-end gap-3 p-5">
-          <div className="flex-1 min-w-[260px]">
+          <div className="min-w-[260px] flex-1">
             <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Select program</label>
             <Select value={programId} onValueChange={setProgramId}>
               <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
@@ -68,7 +113,7 @@ function SmartMatchPage() {
           </div>
           <Button onClick={runMatch} disabled={running} className="gap-2">
             {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {running ? "Analyzing…" : "Run AI match"}
+            {running ? "Analyzing..." : "Run match"}
           </Button>
         </CardContent>
       </Card>
@@ -79,7 +124,8 @@ function SmartMatchPage() {
           <CardContent className="space-y-3 text-sm">
             <div><div className="text-xs text-muted-foreground">Title</div><div className="font-medium">{program.title}</div></div>
             <div><div className="text-xs text-muted-foreground">District</div><div>{program.district}</div></div>
-            <div><div className="text-xs text-muted-foreground">Required skills</div>
+            <div>
+              <div className="text-xs text-muted-foreground">Required skills</div>
               <div className="mt-1 flex flex-wrap gap-1">{program.requiredSkills.map((s) => <Badge key={s} variant="secondary">{s}</Badge>)}</div>
             </div>
             <div><div className="text-xs text-muted-foreground">Slots</div><div>{program.slotsFilled} / {program.slotsTotal}</div></div>
@@ -87,38 +133,51 @@ function SmartMatchPage() {
         </Card>
 
         <Card className="lg:col-span-2">
-          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Sparkles className="h-4 w-4 text-accent" /> AI match results</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Sparkles className="h-4 w-4 text-accent" /> Match results</CardTitle></CardHeader>
           <CardContent>
             {!results && !running && (
               <div className="rounded-md border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-                Click "Run AI match" to generate top candidates.
+                Click "Run match" to rank volunteers who already applied to this program.
               </div>
             )}
             {running && (
               <div className="space-y-3">
                 <Progress value={60} className="h-1.5" />
-                <p className="text-sm text-muted-foreground">Scoring volunteers against required skills, district, availability, and past performance…</p>
+                <p className="text-sm text-muted-foreground">Scoring program applicants against required skills, district, availability, and past performance...</p>
               </div>
             )}
             {results && (
               <div className="space-y-3">
                 {results.map((r) => {
-                  const v = VOLUNTEERS.find((x) => x.id === r.volunteerId)!;
+                  const name = r.volunteerName || r.volunteerId;
+                  const district = r.district ?? "Unassigned";
+                  const hours = r.hoursContributed;
+                  const rating = r.rating;
                   return (
                     <div key={r.volunteerId} className="flex items-start gap-4 rounded-lg border border-border/60 p-4">
-                      <Avatar className="h-11 w-11"><AvatarFallback className="bg-primary/10 text-primary">{v.name.split(" ").map((n) => n[0]).slice(0, 2).join("")}</AvatarFallback></Avatar>
+                      <Avatar className="h-11 w-11">
+                        <AvatarFallback className="bg-primary/10 text-primary">{name.split(" ").map((n) => n[0]).slice(0, 2).join("")}</AvatarFallback>
+                      </Avatar>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-3">
-                          <div className="font-semibold">{v.name}</div>
+                          <div className="font-semibold">{name}</div>
                           <div className="flex items-center gap-2">
                             <div className="font-display text-lg font-bold text-accent">{r.score}%</div>
-                            <Badge className="bg-accent/15 text-accent hover:bg-accent/15">match</Badge>
+                            <Badge className="bg-accent/15 text-accent hover:bg-accent/15">{r.matchSource === "ai" ? "AI match" : "rules match"}</Badge>
                           </div>
                         </div>
-                        <p className="mt-0.5 text-xs text-muted-foreground">{v.district} · {v.hoursContributed}h · ⭐ {v.rating.toFixed(1)}</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {district} · {hours}h · {rating.toFixed(1)} · application {r.applicationStatus?.replace("_", " ") ?? "submitted"}
+                        </p>
                         <p className="mt-2 rounded-md bg-muted/50 p-2 text-xs italic text-muted-foreground">"{r.reason}"</p>
                         <div className="mt-3 flex gap-2">
-                          <Button size="sm" onClick={() => toast.success(`${v.name} assignment queued. Use Deployments to finalize.`)}>Assign</Button>
+                          <Button size="sm" onClick={() => acceptAndAssign(r)} disabled={assigningId === r.volunteerId}>
+                            {assigningId === r.volunteerId ? (
+                              <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Assigning...</>
+                            ) : (
+                              <><CheckCircle2 className="mr-1.5 h-3.5 w-3.5" /> Accept & assign</>
+                            )}
+                          </Button>
                           <Button size="sm" variant="outline" onClick={() => navigate("/coordinator/volunteers")}>View profile</Button>
                         </div>
                       </div>

@@ -90,7 +90,7 @@ function BrowseProgramsInner() {
 
   if (!user || !v) return null;
 
-  const list = programSource.filter((p) => p.status !== "draft")
+  const list = programSource.filter((p) => p.status === "open")
     .filter((p) => {
       const end = new Date(p.endDate);
       if (Number.isNaN(end.getTime())) return true;

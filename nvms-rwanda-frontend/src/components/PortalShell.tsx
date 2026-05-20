@@ -52,8 +52,8 @@ const NAV: Record<UserRole, NavItem[]> = {
     { to: "/admin/users", labelKey: "portal.usersRoles", icon: Users },
     { to: "/admin/audit", labelKey: "portal.auditLog", icon: ScrollText },
     { to: "/admin/invites", labelKey: "portal.userInvites", icon: User },
-    { to: "/volunteer", labelKey: "portal.volunteerWorkspace", icon: HeartHandshake },
-    { to: "/coordinator", labelKey: "portal.coordinatorWorkspace", icon: Building2 },
+    { to: "/admin/users?role=volunteer", labelKey: "portal.volunteerWorkspace", icon: HeartHandshake },
+    { to: "/admin/users?role=coordinator", labelKey: "portal.coordinatorWorkspace", icon: Building2 },
     { to: "/admin/programs", labelKey: "portal.programs", icon: Briefcase },
     { to: "/admin/reports", labelKey: "portal.aiReports", icon: Sparkles },
     { to: "/admin/settings", labelKey: "common.settings", icon: Settings },
@@ -105,12 +105,14 @@ export function PortalShell({ role, children }: PortalShellProps) {
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label="Sidebar">
           {items.map((item) => {
+            const itemPath = item.to.split("?")[0];
+            const itemSearch = item.to.includes("?") ? `?${item.to.split("?")[1]}` : "";
             const active =
               item.to === "/coordinator"
                 ? location.pathname.startsWith("/coordinator")
                 : item.to === "/volunteer"
                   ? location.pathname === "/volunteer"
-                  : location.pathname === item.to;
+                  : location.pathname === itemPath && (itemSearch ? location.search === itemSearch : location.search === "");
             const Icon = item.icon;
             return (
               <Link

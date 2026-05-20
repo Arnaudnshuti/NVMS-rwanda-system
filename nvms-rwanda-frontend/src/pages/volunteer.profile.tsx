@@ -17,6 +17,7 @@ import { nvmsApiEnabled, patchMyProfileApi } from "@/lib/nvms-api";
 import { volunteerProfileForAuthUser } from "@/lib/volunteer-profile";
 import { resolveProfileTrustStatus } from "@/lib/portal-access";
 import { patchRegistryUserByEmail } from "@/lib/account-registry";
+import { limitNationalIdInput, validateRwandaNationalId } from "@/lib/validation";
 import {
   volunteerProfileMissingFields,
   volunteerTrustTierLabel,
@@ -80,12 +81,17 @@ function ProfilePageInner() {
         toast.error("Add at least one skill.");
         return;
       }
+      const nationalIdCheck = nationalId.trim() ? validateRwandaNationalId(nationalId, user.dateOfBirth) : null;
+      if (nationalIdCheck && !nationalIdCheck.ok) {
+        toast.error(nationalIdCheck.error);
+        return;
+      }
       if (nvmsApiEnabled()) {
         const res = await patchMyProfileApi({
           volunteerAvailability: availability.trim(),
           profession: profession.trim(),
           educationLevel: educationLevel && educationLevel !== "__none" ? educationLevel : "",
-          nationalId: nationalId.trim(),
+          nationalId: nationalIdCheck?.value ?? "",
           trustSkillsSummary: skillsLine.trim(),
         });
         if (!res.ok) {
@@ -107,7 +113,7 @@ function ProfilePageInner() {
         volunteerAvailability: availability.trim(),
         profession: profession.trim() || undefined,
         educationLevel: educationLevel.trim() || undefined,
-        nationalId: nationalId.trim() || undefined,
+        nationalId: nationalIdCheck?.value || undefined,
         trustSkillsSummary: skillsLine.trim(),
       });
       if (!ok) {
@@ -234,8 +240,10 @@ function ProfilePageInner() {
                 <Input
                   id="nid-p"
                   value={nationalId}
-                  onChange={(e) => setNationalId(e.target.value)}
+                  onChange={(e) => setNationalId(limitNationalIdInput(e.target.value))}
                   placeholder="1 1990 8 …"
+                  inputMode="numeric"
+                  maxLength={16}
                   disabled={!isRegistry}
                 />
               </div>

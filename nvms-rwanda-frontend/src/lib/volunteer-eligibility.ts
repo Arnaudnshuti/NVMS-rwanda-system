@@ -17,8 +17,6 @@ export function volunteerProfileMissingFields(user: DemoUser, v: Volunteer): str
   const missing: string[] = [];
   if (!v.phone?.trim()) missing.push("Phone number");
   if (!v.skills?.length) missing.push("Skills");
-  const avail = v.availability?.trim();
-  if (!avail || avail === "Not set") missing.push("Availability");
   if (!user.profession?.trim()) missing.push("Profession");
   if (!user.educationLevel?.trim()) missing.push("Education level");
   return missing;

@@ -1,12 +1,24 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { SiteHeader, SiteFooter } from "@/components/SiteShell";
-import { PROGRAMS } from "@/lib/mock-data";
+import { PROGRAMS, type Program } from "@/lib/mock-data";
 import { ProgramCard } from "@/components/ProgramCard";
 import { Button } from "@/components/ui/button";
+import { fetchProgramsFromApi, nvmsApiEnabled } from "@/lib/nvms-api";
+import { toast } from "sonner";
 
 
 function ProgramsPage() {
-  const open = PROGRAMS.filter((p) => p.status === "open" || p.status === "in_progress");
+  const [programs, setPrograms] = useState<Program[]>(PROGRAMS);
+  const open = programs.filter((p) => p.status === "open" || p.status === "in_progress");
+
+  useEffect(() => {
+    if (!nvmsApiEnabled()) return;
+    void fetchProgramsFromApi()
+      .then(setPrograms)
+      .catch(() => toast.error("Could not load programs"));
+  }, []);
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <SiteHeader />

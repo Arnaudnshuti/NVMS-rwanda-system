@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowRight, Users, MapPin, BarChart3, Sparkles, ShieldCheck, HeartHandshake } from "lucide-react";
@@ -5,12 +6,22 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { SiteHeader, SiteFooter } from "@/components/SiteShell";
 import { NATIONAL_KPIS } from "@/lib/mock-data";
+import { nvmsApiEnabled, publicStatsApi } from "@/lib/nvms-api";
 import heroImage from "@/assets/hero-volunteers.jpg";
 import coatOfArmsBlue from "@/assets/rwanda-coat-of-arms-blue.png";
 
 
 function Index() {
   const { t } = useTranslation();
+  const [stats, setStats] = useState<{ volunteers: number; activePrograms: number; hours: number; districts: number } | null>(null);
+
+  useEffect(() => {
+    if (!nvmsApiEnabled()) return;
+    void publicStatsApi().then((r) => {
+      if (r.ok) setStats(r.data);
+    });
+  }, []);
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
       <SiteHeader />
@@ -56,10 +67,10 @@ function Index() {
         {/* Stats */}
         <section className="border-b border-border bg-background">
           <div className="mx-auto grid max-w-7xl grid-cols-2 gap-4 px-4 py-10 sm:px-6 md:grid-cols-4">
-            <Stat label={t("site.statsVolunteers")} value={NATIONAL_KPIS.totalVolunteers.toLocaleString()} />
-            <Stat label={t("site.statsPrograms")} value={NATIONAL_KPIS.activePrograms} />
-            <Stat label={t("site.statsHours")} value={NATIONAL_KPIS.totalHours.toLocaleString()} />
-            <Stat label={t("site.statsDistricts")} value={`${NATIONAL_KPIS.districtsCovered} / 30`} />
+            <Stat label={t("site.statsVolunteers")} value={(stats?.volunteers ?? NATIONAL_KPIS.totalVolunteers).toLocaleString()} />
+            <Stat label={t("site.statsPrograms")} value={stats?.activePrograms ?? NATIONAL_KPIS.activePrograms} />
+            <Stat label={t("site.statsHours")} value={(stats?.hours ?? NATIONAL_KPIS.totalHours).toLocaleString()} />
+            <Stat label={t("site.statsDistricts")} value={`${stats?.districts ?? NATIONAL_KPIS.districtsCovered} / 30`} />
           </div>
         </section>
 

@@ -23,7 +23,7 @@ export function mapApiUserToDemoUser(raw: Record<string, unknown>): DemoUser {
     emergencyContactPhone: raw.emergencyContactPhone != null ? String(raw.emergencyContactPhone) : undefined,
     trustSkillsSummary: raw.trustSkillsSummary != null ? String(raw.trustSkillsSummary) : undefined,
     identityDocuments: Array.isArray(raw.identityDocuments)
-      ? (raw.identityDocuments as { label: string; fileName: string }[])
+      ? (raw.identityDocuments as DemoUser["identityDocuments"])
       : undefined,
     contactPreference: raw.contactPreference as DemoUser["contactPreference"],
     dateOfBirth: raw.dateOfBirth != null ? String(raw.dateOfBirth) : undefined,

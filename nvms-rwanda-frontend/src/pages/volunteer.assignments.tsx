@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { PortalShell } from "@/components/PortalShell";
 import { PageHeader } from "@/components/DashboardUI";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +26,13 @@ import { appendAssignmentReport, reportsForAssignment, reportsForVolunteer } fro
 import { isVolunteerTrustedForPrograms } from "@/lib/portal-access";
 import { toast } from "sonner";
 import type { AssignmentReportReviewStatus } from "@/lib/assignment-reports";
+import {
+  fetchActivityLogsFromApi,
+  fetchMyAssignmentsFromApi,
+  nvmsApiEnabled,
+  submitActivityLogApi,
+  type ApiAssignment,
+} from "@/lib/nvms-api";
 
 function reportReviewCls(s: AssignmentReportReviewStatus | undefined) {
   if (s === "approved") return "border-success/30 bg-success/10 text-success";
@@ -48,11 +55,46 @@ function MyAssignmentsInner() {
   if (!user) return null;
   const v = volunteerProfileForAuthUser(user);
   const trusted = isVolunteerTrustedForPrograms(user);
-  const mine = ASSIGNMENTS.filter((a) => a.volunteerId === v.id);
+  const apiOn = nvmsApiEnabled();
+  const [remoteAssignments, setRemoteAssignments] = useState<ApiAssignment[]>([]);
+  const [remoteReports, setRemoteReports] = useState<ReturnType<typeof reportsForVolunteer>>([]);
+  const mine = apiOn ? remoteAssignments : ASSIGNMENTS.filter((a) => a.volunteerId === v.id);
 
-  const allReports = useMemo(() => reportsForVolunteer(v.id), [v.id, version]);
+  const allReports = useMemo(() => (apiOn ? remoteReports : reportsForVolunteer(v.id)), [apiOn, remoteReports, v.id, version]);
 
-  const bump = () => setVersion((n) => n + 1);
+  const loadRemote = async () => {
+    if (!apiOn) return;
+    try {
+      const [assignments, logs] = await Promise.all([fetchMyAssignmentsFromApi(), fetchActivityLogsFromApi()]);
+      setRemoteAssignments(assignments);
+      setRemoteReports(
+        logs.map((l) => ({
+          id: l.id,
+          volunteerId: l.volunteerId,
+          assignmentId: assignments.find((a) => a.programId === l.programId)?.id ?? l.programId,
+          programId: l.programId,
+          programTitle: assignments.find((a) => a.programId === l.programId)?.programTitle ?? l.programTitle ?? l.programId,
+          date: l.date,
+          hours: Number(l.hours),
+          narrative: l.description,
+          evidence: l.attachments?.map((a) => ({ label: "Field proof", fileName: a.fileName })),
+          createdAt: l.date,
+          reviewStatus: l.status === "pending" ? "pending_review" : l.status,
+        })),
+      );
+    } catch {
+      toast.error("Could not load assignments from backend");
+    }
+  };
+
+  useEffect(() => {
+    void loadRemote();
+  }, [apiOn]);
+
+  const bump = () => {
+    setVersion((n) => n + 1);
+    void loadRemote();
+  };
 
   return (
     <>
@@ -80,7 +122,7 @@ function MyAssignmentsInner() {
         )}
         {mine.map((a) => {
           const program = PROGRAMS.find((p) => p.id === a.programId);
-          const reports = reportsForAssignment(a.id);
+          const reports = apiOn ? allReports.filter((r) => r.programId === a.programId) : reportsForAssignment(a.id);
           return (
             <Card key={a.id} className="border-border/60">
               <CardContent className="p-5">
@@ -107,6 +149,7 @@ function MyAssignmentsInner() {
                       programTitle={a.programTitle}
                       disabled={!trusted}
                       onSubmitted={bump}
+                      apiOn={apiOn}
                     />
                   </div>
                 </div>
@@ -182,12 +225,14 @@ function ReportDialog({
   programTitle,
   disabled,
   onSubmitted,
+  apiOn,
 }: {
-  assignment: (typeof ASSIGNMENTS)[0];
+  assignment: (typeof ASSIGNMENTS)[0] | ApiAssignment;
   volunteerId: string;
   programTitle: string;
   disabled: boolean;
   onSubmitted: () => void;
+  apiOn: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -202,27 +247,45 @@ function ReportDialog({
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const h = Number(hours);
-    if (!narrative.trim() || !hours || h <= 0) {
-      toast.error("Add what you accomplished and valid hours.");
-      return;
-    }
-    appendAssignmentReport({
-      volunteerId,
-      assignmentId: assignment.id,
-      programId: assignment.programId,
-      programTitle,
-      date,
-      hours: h,
-      narrative: narrative.trim(),
-      evidence: evidenceMeta(proof, "Field proof"),
-    });
-    toast.success("Report submitted", { description: "Your district coordinator can review it in the dashboard (demo: stored in this browser)." });
-    setNarrative("");
-    setHours("");
-    setProof(null);
-    setOpen(false);
-    onSubmitted();
+    void (async () => {
+      const h = Number(hours);
+      if (!narrative.trim() || !hours || h <= 0) {
+        toast.error("Add what you accomplished and valid hours.");
+        return;
+      }
+      if (apiOn) {
+        const res = await submitActivityLogApi({
+          programId: assignment.programId,
+          date,
+          hours: h,
+          description: narrative.trim(),
+          files: proof ? Array.from(proof) : [],
+        });
+        if (!res.ok) {
+          toast.error(res.error);
+          return;
+        }
+      } else {
+        appendAssignmentReport({
+          volunteerId,
+          assignmentId: assignment.id,
+          programId: assignment.programId,
+          programTitle,
+          date,
+          hours: h,
+          narrative: narrative.trim(),
+          evidence: evidenceMeta(proof, "Field proof"),
+        });
+      }
+      toast.success("Report submitted", {
+        description: apiOn ? "Your district coordinator can review it in the dashboard." : "Your district coordinator can review it in the dashboard (demo: stored in this browser).",
+      });
+      setNarrative("");
+      setHours("");
+      setProof(null);
+      setOpen(false);
+      onSubmitted();
+    })();
   };
 
   return (
@@ -265,7 +328,7 @@ function ReportDialog({
               onChange={(e) => setProof(e.target.files)}
             />
             <p className="mt-1 text-xs text-muted-foreground">
-              Attach photos or PDFs (attendance sheet, signed forms, field photos). In this demo we store file names only; backend will store encrypted files and hashes.
+              Attach photos or PDFs (attendance sheet, signed forms, field photos).
             </p>
           </div>
           <DialogFooter>

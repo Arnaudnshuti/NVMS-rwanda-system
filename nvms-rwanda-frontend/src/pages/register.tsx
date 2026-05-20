@@ -7,10 +7,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Logo } from "@/components/Logo";
 import { RWANDA_DISTRICTS } from "@/lib/mock-data";
-import { listAccountsForLogin } from "@/lib/account-registry";
 import { toast } from "sonner";
-import { listDistrictsApi, nvmsApiEnabled, type ApiDistrict } from "@/lib/nvms-api";
+import { listDistrictsApi, type ApiDistrict } from "@/lib/nvms-api";
 import { useEffect, useMemo } from "react";
+import { limitRwandaPhoneInput, validateBirthDate, validateRwandaPhone } from "@/lib/validation";
 
 function RegisterPage() {
   const { register } = useAuth();
@@ -24,45 +24,52 @@ function RegisterPage() {
     dateOfBirth: "",
     contactPreference: "both" as "email" | "sms" | "both",
   });
-  const apiOn = nvmsApiEnabled();
   const [districts, setDistricts] = useState<ApiDistrict[] | null>(null);
+  const maxBirthDate = new Date();
+  maxBirthDate.setFullYear(maxBirthDate.getFullYear() - 18);
+  const maxBirthDateValue = maxBirthDate.toISOString().slice(0, 10);
 
   useEffect(() => {
-    if (!apiOn) return;
     listDistrictsApi().then((r) => {
       if (!r.ok) return;
       setDistricts(r.data);
     });
-  }, [apiOn]);
+  }, []);
 
   const districtOptions = useMemo(() => {
-    if (apiOn && districts) return districts.map((d) => ({ value: d.id, label: d.name }));
-    return RWANDA_DISTRICTS.map((d) => ({ value: d, label: d }));
-  }, [apiOn, districts]);
+    return RWANDA_DISTRICTS.map((name) => {
+      const apiDistrict = districts?.find((d) => d.name === name);
+      return { value: apiDistrict?.id ?? name, label: name, districtId: apiDistrict?.id };
+    });
+  }, [districts]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const emailTaken = listAccountsForLogin().some(
-      (u) => u.email.toLowerCase() === form.email.trim().toLowerCase(),
-    );
-    if (emailTaken) {
-      toast.error("An account with this email already exists. Sign in instead.");
+    const dobCheck = validateBirthDate(form.dateOfBirth);
+    if (!dobCheck.ok) {
+      toast.error(dobCheck.error);
       return;
     }
-    if (!form.dateOfBirth.trim()) {
-      toast.error("Please enter your date of birth.");
+    const phoneCheck = validateRwandaPhone(form.phone);
+    if (!phoneCheck.ok) {
+      toast.error(phoneCheck.error);
+      return;
+    }
+    const selectedDistrict = districtOptions.find((d) => d.value === form.district);
+    if (!selectedDistrict) {
+      toast.error("Please select your district.");
       return;
     }
     try {
       await register({
         name: form.name,
         email: form.email,
-        district: apiOn ? undefined : form.district,
-        districtId: apiOn ? form.district : undefined,
-        phone: form.phone,
+        district: selectedDistrict?.districtId ? undefined : selectedDistrict?.label,
+        districtId: selectedDistrict?.districtId,
+        phone: phoneCheck.value,
         password: form.password,
         contactPreference: form.contactPreference,
-        dateOfBirth: form.dateOfBirth.trim() || undefined,
+        dateOfBirth: dobCheck.value,
       });
       toast.success("Registration received", {
         description:
@@ -95,11 +102,18 @@ function RegisterPage() {
             </div>
             <div>
               <Label htmlFor="phone">Phone</Label>
-              <Input id="phone" placeholder="+250 78…" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required />
+              <Input
+                id="phone"
+                placeholder="078XXXXXXX or +2507XXXXXXXX"
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: limitRwandaPhoneInput(e.target.value) })}
+                maxLength={13}
+                required
+              />
             </div>
             <div>
               <Label htmlFor="district">District</Label>
-              <Select value={form.district} onValueChange={(v) => setForm({ ...form, district: v })}>
+              <Select required value={form.district} onValueChange={(v) => setForm({ ...form, district: v })}>
                 <SelectTrigger id="district"><SelectValue placeholder="Select your district" /></SelectTrigger>
                 <SelectContent>
                   {districtOptions.map((d) => <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>)}
@@ -108,7 +122,7 @@ function RegisterPage() {
             </div>
             <div>
               <Label htmlFor="dob">Date of birth</Label>
-              <Input id="dob" type="date" value={form.dateOfBirth} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} required />
+              <Input id="dob" type="date" max={maxBirthDateValue} value={form.dateOfBirth} onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })} required />
             </div>
             <div>
               <Label htmlFor="password">Password</Label>

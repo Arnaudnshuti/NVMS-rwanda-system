@@ -7,20 +7,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PROGRAMS, RWANDA_DISTRICTS } from "@/lib/mock-data";
+import { RWANDA_DISTRICTS, type Program } from "@/lib/mock-data";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { programsVisibleToCoordinator } from "@/lib/portal-access";
-import { createProgramApi, nvmsApiEnabled } from "@/lib/nvms-api";
-import { useMemo, useState } from "react";
+import { createProgramApi, fetchAdminProgramsFromApi } from "@/lib/nvms-api";
+import { useEffect, useMemo, useState } from "react";
 
 
 function CoordinatorPrograms() {
   const { user } = useAuth();
-  const visiblePrograms = programsVisibleToCoordinator(user, PROGRAMS);
-  const apiOn = nvmsApiEnabled();
+  const [programs, setPrograms] = useState<Program[]>([]);
   const myDistrict = user?.role === "coordinator" ? (user.district ?? "") : "";
+  const visiblePrograms = programsVisibleToCoordinator(user, programs);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -31,6 +31,19 @@ function CoordinatorPrograms() {
   const [slotsTotal, setSlotsTotal] = useState(10);
   const [requiredSkills, setRequiredSkills] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const loadPrograms = async () => {
+    try {
+      setPrograms(await fetchAdminProgramsFromApi());
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not load programs");
+      setPrograms([]);
+    }
+  };
+
+  useEffect(() => {
+    void loadPrograms();
+  }, []);
 
   const districtOptions = useMemo(() => {
     if (user?.role === "coordinator" && myDistrict) return [myDistrict];
@@ -54,10 +67,6 @@ function CoordinatorPrograms() {
                 className="space-y-4"
                 onSubmit={async (e) => {
                   e.preventDefault();
-                  if (!apiOn) {
-                    toast.success("Program created (demo).");
-                    return;
-                  }
                   setBusy(true);
                   const res = await createProgramApi({
                     title: title.trim(),
@@ -79,6 +88,7 @@ function CoordinatorPrograms() {
                     return;
                   }
                   toast.success("Program created.");
+                  void loadPrograms();
                 }}
               >
                 <div><Label>Title</Label><Input required value={title} onChange={(e) => setTitle(e.target.value)} /></div>

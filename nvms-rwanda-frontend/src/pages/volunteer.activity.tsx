@@ -16,6 +16,7 @@ import { useAuth } from "@/lib/auth";
 import { volunteerProfileForAuthUser } from "@/lib/volunteer-profile";
 import { fetchActivityLogsFromApi, fetchMyAssignmentsFromApi, nvmsApiEnabled, submitActivityLogApi } from "@/lib/nvms-api";
 
+type ActivityLogRow = ActivityLog & { programTitle?: string };
 
 function ActivityPage() {
   return (
@@ -29,7 +30,7 @@ function ActivityPageInner() {
   const { user } = useAuth();
   if (!user) return null;
   const v = volunteerProfileForAuthUser(user);
-  const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [logs, setLogs] = useState<ActivityLogRow[]>([]);
   const [files, setFiles] = useState<FileList | null>(null);
   const [myAssignments, setMyAssignments] = useState(ASSIGNMENTS.filter((a) => a.volunteerId === v.id));
   const apiOn = nvmsApiEnabled();
@@ -47,6 +48,7 @@ function ActivityPageInner() {
             id: l.id,
             volunteerId: l.volunteerId,
             programId: l.programId,
+            programTitle: l.programTitle,
             date: l.date,
             hours: Number(l.hours),
             description: l.description,
@@ -96,6 +98,7 @@ function ActivityPageInner() {
               id: l.id,
               volunteerId: l.volunteerId,
               programId: l.programId,
+              programTitle: l.programTitle,
               date: l.date,
               hours: Number(l.hours),
               description: l.description,
@@ -166,10 +169,11 @@ function ActivityPageInner() {
           <CardContent className="space-y-3">
             {logs.map((l) => {
               const program = PROGRAMS.find((p) => p.id === l.programId);
+              const assignment = myAssignments.find((a) => a.programId === l.programId);
               return (
                 <div key={l.id} className="flex items-start justify-between gap-4 rounded-md border border-border/60 p-3">
                   <div className="flex-1">
-                    <p className="text-sm font-medium">{program?.title || "—"}</p>
+                    <p className="text-sm font-medium">{l.programTitle ?? assignment?.programTitle ?? program?.title ?? "Program"}</p>
                     <p className="mt-0.5 text-sm text-muted-foreground">{l.description}</p>
                     <p className="mt-1 text-xs text-muted-foreground">{format(new Date(l.date), "MMM d, yyyy")} · {l.hours}h</p>
                   </div>

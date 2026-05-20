@@ -1,8 +1,6 @@
 import type { DemoUser, Program, ProfileTrustStatus, UserRole } from "./mock-data";
 
-/** MINALOC admins can open volunteer/coordinator portals for national oversight (UI-level in this demo). */
 export function canAccessPortal(user: DemoUser, portalRole: UserRole): boolean {
-  if (user.role === "admin") return true;
   return user.role === portalRole;
 }
 

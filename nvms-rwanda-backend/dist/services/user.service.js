@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.service.js";
+import { publicUploadUrl } from "./uploads.service.js";
 export function serializeUser(u) {
     return {
         id: u.id,
@@ -33,8 +34,13 @@ export async function serializeUserWithDocs(u) {
     const base = serializeUser(u);
     base.identityDocuments = await prisma.identityDocument.findMany({
         where: { userId: u.id },
-        select: { label: true, fileName: true },
+        select: { id: true, label: true, fileName: true, storageKey: true },
         orderBy: { createdAt: "asc" },
-    });
+    }).then((docs) => docs.map((d) => ({
+        id: d.id,
+        label: d.label,
+        fileName: d.fileName,
+        url: d.storageKey ? publicUploadUrl(d.storageKey) : null,
+    })));
     return base;
 }

@@ -1,5 +1,6 @@
 import type { User } from "@prisma/client";
 import { prisma } from "./prisma.service.js";
+import { publicUploadUrl } from "./uploads.service.js";
 
 export function serializeUser(u: User) {
   return {
@@ -16,7 +17,7 @@ export function serializeUser(u: User) {
     emergencyContactName: u.emergencyContactName ?? undefined,
     emergencyContactPhone: u.emergencyContactPhone ?? undefined,
     trustSkillsSummary: u.trustSkillsSummary ?? undefined,
-    identityDocuments: undefined as { label: string; fileName: string }[] | undefined,
+    identityDocuments: undefined as { id: string; label: string; fileName: string; url: string | null }[] | undefined,
     contactPreference: (u.contactPreference as "email" | "sms" | "both" | undefined) ?? undefined,
     dateOfBirth: u.dateOfBirth ? u.dateOfBirth.toISOString().slice(0, 10) : undefined,
     profession: u.profession ?? undefined,
@@ -36,8 +37,15 @@ export async function serializeUserWithDocs(u: User) {
   const base = serializeUser(u);
   base.identityDocuments = await prisma.identityDocument.findMany({
     where: { userId: u.id },
-    select: { label: true, fileName: true },
+    select: { id: true, label: true, fileName: true, storageKey: true },
     orderBy: { createdAt: "asc" },
-  });
+  }).then((docs) =>
+    docs.map((d) => ({
+      id: d.id,
+      label: d.label,
+      fileName: d.fileName,
+      url: d.storageKey ? publicUploadUrl(d.storageKey) : null,
+    })),
+  );
   return base;
 }

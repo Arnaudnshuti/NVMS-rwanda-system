@@ -32,8 +32,8 @@ export interface DemoUser {
   emergencyContactPhone?: string;
   /** Comma-separated or single-line skills for KYC (synced to profile when backend exists). */
   trustSkillsSummary?: string;
-  /** Mock file metadata until uploads go to object storage. */
-  identityDocuments?: { label: string; fileName: string }[];
+  /** Uploaded identity document metadata. `url` is present for backend-stored files. */
+  identityDocuments?: { id?: string; label: string; fileName: string; url?: string | null }[];
   /** Structured registration / profile fields (persisted via registry API in production). */
   dateOfBirth?: string;
   profession?: string;

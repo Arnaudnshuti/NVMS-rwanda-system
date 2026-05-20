@@ -47,6 +47,12 @@ applicationsRouter.post("/", requireAuth, async (req: AuthRequest, res) => {
 
   const program = await prisma.program.findUnique({ where: { id: parsed.data.programId } });
   if (!program) return res.status(404).json({ error: "Program not found" });
+  if (program.status !== "open") {
+    return res.status(400).json({ error: "This program is not currently open for applications." });
+  }
+  if (volunteer.district && program.district !== volunteer.district) {
+    return res.status(403).json({ error: "You can only apply to programs in your registered district." });
+  }
 
   const blocking = await prisma.programApplication.findFirst({
     where: {
@@ -59,13 +65,20 @@ applicationsRouter.post("/", requireAuth, async (req: AuthRequest, res) => {
     return res.status(409).json({ error: "You already have an active application for this program." });
   }
 
-  const app = await prisma.programApplication.create({
-    data: {
-      volunteerId: volunteer.id,
-      programId: program.id,
-      status: "submitted",
-    },
-    include: { volunteer: { select: { email: true, name: true, district: true } } },
+  const app = await prisma.$transaction(async (tx) => {
+    const created = await tx.programApplication.create({
+      data: {
+        volunteerId: volunteer.id,
+        programId: program.id,
+        status: "submitted",
+      },
+      include: { volunteer: { select: { email: true, name: true, district: true } } },
+    });
+    await tx.program.update({
+      where: { id: program.id },
+      data: { slotsFilled: { increment: 1 } },
+    });
+    return created;
   });
 
   if (program.coordinatorUserId) {
@@ -115,9 +128,9 @@ applicationsRouter.get("/", requireAuth, async (req: AuthRequest, res) => {
     return res.json(list.map(serializeApplication));
   }
 
-  // coordinator: only programs owned by this coordinator.
+  // coordinator: applications for programs running in their assigned district.
   const programs = await prisma.program.findMany({
-    where: { coordinatorUserId: me.id },
+    where: me.district ? { district: me.district } : { coordinatorUserId: me.id },
     select: { id: true },
   });
   const ids = programs.map((p) => p.id);
@@ -155,22 +168,55 @@ applicationsRouter.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
       return res.status(403).json({ error: "Volunteers may only withdraw their own application." });
     }
   } else if (me.role === "coordinator") {
-    // Ministry-owned programs must be reviewed by admin.
-    if (!app.program.coordinatorUserId || app.program.coordinatorUserId !== me.id) {
+    if (!me.district || app.program.district !== me.district) {
       return res.status(403).json({ error: "Forbidden" });
     }
   } else if (me.role !== "admin") {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  const updated = await prisma.programApplication.update({
-    where: { id: app.id },
-    data: {
-      status: parsed.data.status,
-      coordinatorNote: parsed.data.coordinatorNote,
-      reviewedAt: new Date(),
-    },
-    include: { volunteer: { select: { email: true, name: true, district: true } } },
+  const wasActive = ["submitted", "under_review", "accepted", "waitlisted"].includes(app.status);
+  const willBeActive = ["submitted", "under_review", "accepted", "waitlisted"].includes(parsed.data.status);
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.programApplication.update({
+      where: { id: app.id },
+      data: {
+        status: parsed.data.status,
+        coordinatorNote: parsed.data.coordinatorNote,
+        reviewedAt: new Date(),
+      },
+      include: { volunteer: { select: { email: true, name: true, district: true } } },
+    });
+    if (wasActive && !willBeActive) {
+      await tx.program.update({
+        where: { id: app.programId },
+        data: { slotsFilled: { decrement: 1 } },
+      });
+    } else if (!wasActive && willBeActive) {
+      await tx.program.update({
+        where: { id: app.programId },
+        data: { slotsFilled: { increment: 1 } },
+      });
+    }
+    if (parsed.data.status === "accepted") {
+      const existingAssignment = await tx.assignment.findFirst({
+        where: { volunteerId: app.volunteerId, programId: app.programId },
+      });
+      if (!existingAssignment) {
+        await tx.assignment.create({
+          data: {
+            volunteerId: app.volunteerId,
+            programId: app.programId,
+            programTitle: app.program.title,
+            district: app.program.district,
+            startDate: app.program.startDate,
+            endDate: app.program.endDate,
+            status: app.program.startDate > new Date() ? "upcoming" : "active",
+          },
+        });
+      }
+    }
+    return row;
   });
 
   if (me.role !== "volunteer") {
@@ -178,7 +224,10 @@ applicationsRouter.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
       userId: updated.volunteerId,
       type: parsed.data.status === "accepted" ? "SUCCESS" : parsed.data.status === "rejected" ? "WARNING" : "INFO",
       title: "Application status updated",
-      message: `Your application status is now ${parsed.data.status.replace("_", " ")}.`,
+      message:
+        parsed.data.status === "accepted"
+          ? "Your application was accepted and the program now appears under My Assignments."
+          : `Your application status is now ${parsed.data.status.replace("_", " ")}.`,
       metadata: { applicationId: updated.id, status: parsed.data.status, programId: updated.programId },
     });
   }

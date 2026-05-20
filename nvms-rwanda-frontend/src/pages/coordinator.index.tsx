@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { PortalShell } from "@/components/PortalShell";
 import { StatCard, PageHeader } from "@/components/DashboardUI";
@@ -11,18 +11,52 @@ import { format } from "date-fns";
 import { useAuth } from "@/lib/auth";
 import { programsVisibleToCoordinator, coordinatorDistrictScope } from "@/lib/portal-access";
 import { reportsForCoordinatorDistricts } from "@/lib/assignment-reports";
+import {
+  coordinatorListActivityLogsApi,
+  coordinatorListVolunteersApi,
+  fetchAdminProgramsFromApi,
+  nvmsApiEnabled,
+  type ApiActivityLog,
+  type ApiCoordinatorVolunteerRow,
+} from "@/lib/nvms-api";
 
 
 function CoordinatorDashboard() {
   const { user } = useAuth();
-  const scopedPrograms = programsVisibleToCoordinator(user, PROGRAMS);
+  const apiOn = nvmsApiEnabled();
+  const [programs, setPrograms] = useState<typeof PROGRAMS>(PROGRAMS);
+  const [remoteVolunteers, setRemoteVolunteers] = useState<ApiCoordinatorVolunteerRow[]>([]);
+  const [remoteLogs, setRemoteLogs] = useState<ApiActivityLog[]>([]);
+  const scopedPrograms = programsVisibleToCoordinator(user, programs);
   const scope = coordinatorDistrictScope(user);
 
+  useEffect(() => {
+    if (!apiOn) return;
+    void Promise.all([
+      fetchAdminProgramsFromApi(),
+      coordinatorListVolunteersApi(),
+      coordinatorListActivityLogsApi(),
+    ]).then(([p, v, l]) => {
+      setPrograms(p);
+      if (v.ok) setRemoteVolunteers(v.data);
+      if (l.ok) setRemoteLogs(l.data);
+    });
+  }, [apiOn]);
+
   const volunteersInDistrict = useMemo(() => {
+    if (apiOn) {
+      return remoteVolunteers.map((v) => ({
+        id: v.id,
+        name: v.name,
+        district: v.district ?? "",
+        status: v.verificationStatus ?? "pending",
+        joinedAt: v.createdAt,
+      }));
+    }
     if (scope === null) return VOLUNTEERS;
     if (!scope.length) return [];
     return VOLUNTEERS.filter((v) => scope.includes(v.district));
-  }, [scope]);
+  }, [apiOn, remoteVolunteers, scope]);
 
   const pending = useMemo(
     () => volunteersInDistrict.filter((v) => v.status === "pending"),
@@ -32,11 +66,26 @@ function CoordinatorDashboard() {
   const activePrograms = scopedPrograms.filter((p) => p.status === "open" || p.status === "in_progress");
 
   const pendingLogs = useMemo(() => {
+    if (apiOn) return remoteLogs.filter((l) => l.status === "pending");
     const inScope = new Set(volunteersInDistrict.map((v) => v.id));
     return ACTIVITY_LOGS.filter((l) => inScope.has(l.volunteerId) && l.status === "pending");
-  }, [volunteersInDistrict]);
+  }, [apiOn, remoteLogs, volunteersInDistrict]);
 
-  const fieldReports = useMemo(() => reportsForCoordinatorDistricts(scope), [scope]);
+  const fieldReports = useMemo(
+    () =>
+      apiOn
+        ? remoteLogs.map((l) => ({
+            id: l.id,
+            programTitle: l.programTitle ?? l.programId,
+            date: l.date,
+            hours: l.hours,
+            narrative: l.description,
+            evidence: l.attachments,
+            reviewStatus: l.status === "pending" ? "pending_review" : l.status,
+          }))
+        : reportsForCoordinatorDistricts(scope),
+    [apiOn, remoteLogs, scope],
+  );
 
   return (
     <PortalShell role="coordinator">
@@ -108,7 +157,7 @@ function CoordinatorDashboard() {
             <Button asChild variant="outline" size="sm">
               <Link to="/coordinator/reports">Review &amp; validate</Link>
             </Button>
-            <span className="text-xs text-muted-foreground">Demo: stored in browser</span>
+            {!apiOn && <span className="text-xs text-muted-foreground">Demo: stored in browser</span>}
           </div>
         </CardHeader>
         <CardContent className="space-y-3">

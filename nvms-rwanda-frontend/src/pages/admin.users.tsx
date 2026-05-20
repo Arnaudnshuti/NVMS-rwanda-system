@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { PortalShell } from "@/components/PortalShell";
 import { PageHeader } from "@/components/DashboardUI";
 import { Card } from "@/components/ui/card";
@@ -7,8 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { DEMO_USERS, RWANDA_DISTRICTS } from "@/lib/mock-data";
-import { Plus } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -21,45 +20,79 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { getUserOverride, upsertUserOverride, type AdminManagedUserRecord } from "@/lib/admin-user-overrides";
+import {
+  adminListUsersApi,
+  adminUpdateUserApi,
+  listDistrictsApi,
+  type ApiDistrict,
+} from "@/lib/nvms-api";
 
-const extras: AdminManagedUserRecord[] = [
-  { id: "u4", name: "Immaculée Nyirahabimana", email: "i.nyira@gov.rw", role: "coordinator", district: "Musanze", status: "active" },
-  { id: "u5", name: "David Rugamba", email: "d.rugamba@gov.rw", role: "coordinator", district: "Rubavu", status: "active" },
-  { id: "u6", name: "Alice Nyampinga", email: "a.nyampinga@gov.rw", role: "admin", status: "active" },
-];
-
-function mergedUsers(version: number) {
-  const base: AdminManagedUserRecord[] = [
-    ...DEMO_USERS.map((u) => ({
-      id: u.id,
-      name: u.name,
-      email: u.email,
-      role: u.role,
-      district: u.district,
-      status: "active" as const,
-    })),
-    ...extras,
-  ];
-  return base.map((u) => {
-    const ov = getUserOverride(u.id);
-    return {
-      ...u,
-      district: ov.district ?? u.district,
-      status: ov.status ?? u.status,
-      mfaResetPending: ov.mfaResetPending,
-    };
-  });
-}
+type AdminManagedUserRecord = {
+  id: string;
+  name: string;
+  email: string;
+  role: "volunteer" | "coordinator" | "admin";
+  district?: string;
+  status: "active" | "suspended" | "revoked";
+  mfaResetPending?: boolean;
+};
 
 function UsersPage() {
-  const [version, setVersion] = useState(0);
-  const bump = useCallback(() => setVersion((n) => n + 1), []);
+  const [searchParams] = useSearchParams();
+  const roleFilter = searchParams.get("role");
+  const [rows, setRows] = useState<AdminManagedUserRecord[]>([]);
+  const [districts, setDistricts] = useState<ApiDistrict[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(true);
 
-  const rows = useMemo(() => mergedUsers(version), [version]);
+  const filteredRows = useMemo(
+    () => rows.filter((u) => roleFilter === "volunteer" || roleFilter === "coordinator" ? u.role === roleFilter : true),
+    [roleFilter, rows],
+  );
+  const pageTitle =
+    roleFilter === "volunteer"
+      ? "Volunteer workspace"
+      : roleFilter === "coordinator"
+        ? "Coordination workspace"
+        : "Users & Roles";
+  const pageDescription =
+    roleFilter === "volunteer"
+      ? "Review and manage volunteer accounts from the admin portal without entering the volunteer dashboard."
+      : roleFilter === "coordinator"
+        ? "Review and manage coordinator accounts, district assignments, access status, and MFA resets from the admin portal."
+        : "Invite staff, assign coordinator districts, suspend or revoke accounts, and flag MFA resets from the backend.";
+
+  const loadUsers = useCallback(async () => {
+    setLoadingUsers(true);
+    const r = await adminListUsersApi();
+    setLoadingUsers(false);
+    if (!r.ok) {
+      setRows([]);
+      toast.error(r.error);
+      return;
+    }
+    setRows(
+      r.data.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        district: u.district ?? undefined,
+        status: u.govStatus === "revoked" ? "revoked" : u.isActive === false || u.govStatus === "suspended" ? "suspended" : "active",
+        mfaResetPending: u.mfaResetPending,
+      })),
+    );
+  }, []);
+
+  useEffect(() => {
+    void loadUsers();
+    void listDistrictsApi().then((r) => {
+      if (r.ok) setDistricts(r.data);
+    });
+  }, [loadUsers]);
 
   const [dlg, setDlg] = useState<AdminManagedUserRecord | null>(null);
-  const [districtDraft, setDistrictDraft] = useState<string>("");
+  const [districtDraft, setDistrictDraft] = useState("");
   const [suspendedDraft, setSuspendedDraft] = useState(false);
 
   const statusBadgeCls = (s: AdminManagedUserRecord["status"]) =>
@@ -77,41 +110,70 @@ function UsersPage() {
 
   const saveManage = () => {
     if (!dlg) return;
-    const revoked = dlg.status === "revoked";
-    upsertUserOverride(dlg.id, {
-      ...(dlg.role === "coordinator" ? { district: districtDraft || undefined } : {}),
-      status: revoked ? "revoked" : suspendedDraft ? "suspended" : "active",
-    });
-    toast.success("User updated (demo: local overrides only until API connects).");
-    setDlg(null);
-    bump();
+    void (async () => {
+      setBusy(true);
+      const selectedDistrict = districts.find((d) => d.name === districtDraft);
+      const res = await adminUpdateUserApi(dlg.id, {
+        ...(dlg.role === "coordinator"
+          ? { district: districtDraft || undefined, districtId: selectedDistrict?.id }
+          : {}),
+        govStatus: suspendedDraft ? "suspended" : "active",
+        isActive: !suspendedDraft,
+      });
+      setBusy(false);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success("User updated");
+      setDlg(null);
+      void loadUsers();
+    })();
   };
 
   const revokeAccess = () => {
     if (!dlg) return;
-    upsertUserOverride(dlg.id, { status: "revoked" });
-    toast.message("Access revoked locally", {
-      description: "Backend must invalidate sessions for production.",
-    });
-    setDlg(null);
-    bump();
+    void (async () => {
+      setBusy(true);
+      const res = await adminUpdateUserApi(dlg.id, { govStatus: "revoked", isActive: false });
+      setBusy(false);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.message("Access revoked");
+      setDlg(null);
+      void loadUsers();
+    })();
   };
 
   const resetMfa = () => {
     if (!dlg) return;
-    upsertUserOverride(dlg.id, { mfaResetPending: true });
-    toast.success("MFA reset flagged", { description: "User must re-enrol on next sign-in once auth service supports it." });
-    setDlg(null);
-    bump();
+    void (async () => {
+      setBusy(true);
+      const res = await adminUpdateUserApi(dlg.id, { mfaResetPending: true });
+      setBusy(false);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success("MFA reset flagged");
+      setDlg(null);
+      void loadUsers();
+    })();
   };
 
   return (
     <PortalShell role="admin">
       <PageHeader
-        title="Users & Roles"
-        description="Invite staff, assign coordinator districts, suspend or revoke accounts, and flag MFA resets. Changes below are stored locally for prototyping."
+        title={pageTitle}
+        description={pageDescription}
         actions={(
           <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => void loadUsers()} disabled={loadingUsers}>
+              <RefreshCw className="mr-1.5 h-4 w-4" />
+              {loadingUsers ? "Loading..." : "Refresh"}
+            </Button>
             <Button variant="outline" asChild><Link to="/admin/audit">Audit log</Link></Button>
             <Button asChild>
               <Link to="/admin/invites"><Plus className="mr-1.5 h-4 w-4" /> Invite user</Link>
@@ -131,7 +193,14 @@ function UsersPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((u) => (
+            {!loadingUsers && filteredRows.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                  No users found in the database.
+                </TableCell>
+              </TableRow>
+            )}
+            {filteredRows.map((u) => (
               <TableRow key={u.id}>
                 <TableCell>
                   <div className="flex items-center gap-3">
@@ -144,7 +213,7 @@ function UsersPage() {
                   </div>
                 </TableCell>
                 <TableCell><Badge variant="outline" className="capitalize">{u.role}</Badge></TableCell>
-                <TableCell className="text-sm text-muted-foreground">{u.role === "coordinator" ? (u.district ?? "—") : "—"}</TableCell>
+                <TableCell className="text-sm text-muted-foreground">{u.role === "coordinator" ? (u.district ?? "-") : "-"}</TableCell>
                 <TableCell><Badge variant="outline" className={statusBadgeCls(u.status)}>{u.status}</Badge></TableCell>
                 <TableCell className="text-right"><Button size="sm" variant="ghost" onClick={() => openManage(u)}>Manage</Button></TableCell>
               </TableRow>
@@ -158,7 +227,7 @@ function UsersPage() {
           <DialogHeader>
             <DialogTitle>Manage user</DialogTitle>
             <DialogDescription>
-              {dlg?.email} — map to PATCH /admin/users/:id endpoints.
+              Update account access and district assignment for {dlg?.email}.
             </DialogDescription>
           </DialogHeader>
           {dlg?.role === "coordinator" && (
@@ -167,12 +236,15 @@ function UsersPage() {
               <Select value={districtDraft || "__unset__"} onValueChange={(v) => setDistrictDraft(v === "__unset__" ? "" : v)}>
                 <SelectTrigger><SelectValue placeholder="Select district" /></SelectTrigger>
                 <SelectContent className="max-h-64">
-                  <SelectItem value="__unset__">—</SelectItem>
-                  {RWANDA_DISTRICTS.map((d) => (
+                  <SelectItem value="__unset__">-</SelectItem>
+                  {districts.map((d) => d.name).map((d) => (
                     <SelectItem key={d} value={d}>{d}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {districts.length === 0 && (
+                <p className="text-xs text-muted-foreground">No districts were loaded from the backend.</p>
+              )}
             </div>
           )}
           <div className="flex items-center justify-between rounded-md border border-border/60 p-3">
@@ -184,10 +256,10 @@ function UsersPage() {
           </div>
           <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" onClick={resetMfa}>Reset MFA enrolment</Button>
-              <Button variant="destructive" size="sm" onClick={revokeAccess} disabled={dlg?.status === "revoked"}>Revoke access</Button>
+              <Button variant="outline" size="sm" onClick={resetMfa} disabled={busy}>Reset MFA enrolment</Button>
+              <Button variant="destructive" size="sm" onClick={revokeAccess} disabled={busy || dlg?.status === "revoked"}>Revoke access</Button>
             </div>
-            <Button onClick={saveManage} disabled={dlg?.status === "revoked"}>Save</Button>
+            <Button onClick={saveManage} disabled={busy || dlg?.status === "revoked"}>Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

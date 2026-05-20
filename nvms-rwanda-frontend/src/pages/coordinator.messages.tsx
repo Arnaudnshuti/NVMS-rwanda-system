@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PortalShell } from "@/components/PortalShell";
 import { PageHeader } from "@/components/DashboardUI";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,17 +13,36 @@ import { toast } from "sonner";
 import { useAuth } from "@/lib/auth";
 import { VOLUNTEERS } from "@/lib/mock-data";
 import { coordinatorDistrictScope } from "@/lib/portal-access";
+import { coordinatorListVolunteersApi, coordinatorSendMessageApi, nvmsApiEnabled, type ApiCoordinatorVolunteerRow } from "@/lib/nvms-api";
 
 function CoordinatorMessagesPage() {
   const { user } = useAuth();
   const scope = coordinatorDistrictScope(user);
   const district = user?.district ?? "";
+  const apiOn = nvmsApiEnabled();
+  const [remoteRecipients, setRemoteRecipients] = useState<ApiCoordinatorVolunteerRow[]>([]);
+
+  useEffect(() => {
+    if (!apiOn) return;
+    void coordinatorListVolunteersApi().then((r) => {
+      if (r.ok) setRemoteRecipients(r.data);
+      else toast.error(r.error);
+    });
+  }, [apiOn]);
 
   const recipients = useMemo(() => {
+    if (apiOn) {
+      return remoteRecipients.map((v) => ({
+        id: v.id,
+        name: v.name,
+        district: v.district ?? "",
+        status: v.verificationStatus ?? "pending",
+      }));
+    }
     if (scope === null) return VOLUNTEERS;
     if (!scope.length) return [];
     return VOLUNTEERS.filter((v) => scope.includes(v.district));
-  }, [scope]);
+  }, [apiOn, remoteRecipients, scope]);
 
   const [audience, setAudience] = useState<"all" | "verified" | "pending">("all");
   const [channel, setChannel] = useState<"inapp" | "email" | "sms" | "all">("inapp");
@@ -41,11 +60,27 @@ function CoordinatorMessagesPage() {
       toast.error("Add a subject and message.");
       return;
     }
-    toast.success("Message queued (demo)", {
-      description: `Audience: ${audience}. Channel: ${channel}. Recipients: ${filtered.length}. Backend will deliver and track receipts.`,
-    });
-    setSubject("");
-    setMessage("");
+    void (async () => {
+      if (apiOn) {
+        const r = await coordinatorSendMessageApi({
+          audience,
+          channel,
+          subject: subject.trim(),
+          message: message.trim(),
+        });
+        if (!r.ok) {
+          toast.error(r.error);
+          return;
+        }
+        toast.success("Message queued", { description: `Recipients: ${r.data.queued}.` });
+      } else {
+        toast.success("Message queued (demo)", {
+          description: `Audience: ${audience}. Channel: ${channel}. Recipients: ${filtered.length}. Backend will deliver and track receipts.`,
+        });
+      }
+      setSubject("");
+      setMessage("");
+    })();
   };
 
   return (
@@ -54,7 +89,7 @@ function CoordinatorMessagesPage() {
         title="Messages"
         description={
           district
-            ? `Send targeted or broadcast messages to volunteers registered in ${district}. Delivery (Email/SMS) requires backend gateway integration.`
+            ? `Send targeted or broadcast messages to volunteers registered in ${district}.`
             : "Send targeted or broadcast messages to volunteers in your assigned district."
         }
       />
@@ -125,7 +160,7 @@ function CoordinatorMessagesPage() {
               <Badge variant="outline">{filtered.length}</Badge>
             </div>
             <p className="text-xs text-muted-foreground">
-              Backend should store each broadcast, audience query, delivery attempts, and receipts for audit and follow-up.
+              Messages are stored as in-app notifications when the backend is connected.
             </p>
           </CardContent>
         </Card>

@@ -16,6 +16,7 @@ import { patchRegistryUserByEmail } from "@/lib/account-registry";
 import { isVolunteerVerified, resolveProfileTrustStatus } from "@/lib/portal-access";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { nvmsApiEnabled, submitTrustProfileApi, uploadIdentityDocumentApi } from "@/lib/nvms-api";
+import { limitNationalIdInput, limitRwandaPhoneInput, validateRwandaNationalId, validateRwandaPhone } from "@/lib/validation";
 
 const EDUCATION_LEVELS = [
   "Primary",
@@ -73,7 +74,9 @@ function TrustProfileInner() {
   const trust = resolveProfileTrustStatus(user);
   const accountOk = isVolunteerVerified(user);
   const isRegistry = String(user.id).startsWith("new-");
-  const formLocked = trust === "pending_review" || trust === "verified";
+  const hasViewableDocuments = Boolean(user.identityDocuments?.some((doc) => doc.url));
+  const canRepairMetadataOnlySubmission = trust === "pending_review" && !hasViewableDocuments;
+  const formLocked = trust === "verified" || (trust === "pending_review" && !canRepairMetadataOnlySubmission);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,6 +92,16 @@ function TrustProfileInner() {
       }
       if (!nationalId.trim() || !skills.trim() || !emergencyName.trim() || !emergencyPhone.trim()) {
         toast.error("Please fill all required fields.");
+        return;
+      }
+      const nationalIdCheck = validateRwandaNationalId(nationalId, user.dateOfBirth);
+      if (!nationalIdCheck.ok) {
+        toast.error(nationalIdCheck.error);
+        return;
+      }
+      const phoneCheck = validateRwandaPhone(emergencyPhone);
+      if (!phoneCheck.ok) {
+        toast.error(phoneCheck.error);
         return;
       }
       if (!profession.trim() || !educationLevel.trim() || educationLevel === "__none") {
@@ -114,13 +127,13 @@ function TrustProfileInner() {
 
       if (nvmsApiEnabled()) {
         // Upload files first (real storage) then submit metadata for review.
-        const uploads: { label: string; fileName: string }[] = [];
+        const uploads: { id: string; label: string; fileName: string }[] = [];
         const up = async (label: string, fl: FileList | null) => {
           if (!fl?.length) return;
           for (const f of Array.from(fl)) {
             const r = await uploadIdentityDocumentApi(label, f);
             if (!r.ok) throw new Error(r.error);
-            uploads.push({ label: r.data.label, fileName: r.data.fileName });
+            uploads.push({ id: r.data.id, label: r.data.label, fileName: r.data.fileName });
           }
         };
         try {
@@ -136,9 +149,9 @@ function TrustProfileInner() {
         }
 
         const res = await submitTrustProfileApi({
-          nationalId: nationalId.trim(),
+          nationalId: nationalIdCheck.value,
           emergencyContactName: emergencyName.trim(),
-          emergencyContactPhone: emergencyPhone.trim(),
+          emergencyContactPhone: phoneCheck.value,
           trustSkillsSummary: skills.trim(),
           profession: profession.trim(),
           educationLevel: educationLevel.trim(),
@@ -163,9 +176,9 @@ function TrustProfileInner() {
         return;
       }
       const ok = patchRegistryUserByEmail(user.email, {
-        nationalId: nationalId.trim(),
+        nationalId: nationalIdCheck.value,
         emergencyContactName: emergencyName.trim(),
-        emergencyContactPhone: emergencyPhone.trim(),
+        emergencyContactPhone: phoneCheck.value,
         trustSkillsSummary: skills.trim(),
         profession: profession.trim(),
         educationLevel: educationLevel.trim(),
@@ -216,7 +229,9 @@ function TrustProfileInner() {
           <FileCheck2 className="h-4 w-4" />
           <AlertTitle>Under review</AlertTitle>
           <AlertDescription>
-            Your documents are with the coordinator for {user.district ? <strong>{user.district}</strong> : "your registered district"}. Program applications stay closed until approval.
+            {canRepairMetadataOnlySubmission
+              ? "Your previous submission has document names only, not viewable files. Re-upload the documents below so your coordinator can open them."
+              : <>Your documents are with the coordinator for {user.district ? <strong>{user.district}</strong> : "your registered district"}. Program applications stay closed until approval.</>}
           </AlertDescription>
         </Alert>
       )}
@@ -244,7 +259,7 @@ function TrustProfileInner() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
                   <Label htmlFor="nid">National ID number *</Label>
-                  <Input id="nid" value={nationalId} onChange={(e) => setNationalId(e.target.value)} placeholder="e.g. 1 1990 8 …" required disabled={!accountOk || formLocked} />
+                  <Input id="nid" value={nationalId} onChange={(e) => setNationalId(limitNationalIdInput(e.target.value))} placeholder="16 digits, starts with 1YYYY" inputMode="numeric" maxLength={16} required disabled={!accountOk || formLocked} />
                 </div>
                 <div>
                   <Label htmlFor="emg-name">Emergency contact name *</Label>
@@ -252,7 +267,7 @@ function TrustProfileInner() {
                 </div>
                 <div>
                   <Label htmlFor="emg-phone">Emergency contact phone *</Label>
-                  <Input id="emg-phone" value={emergencyPhone} onChange={(e) => setEmergencyPhone(e.target.value)} placeholder="+250 …" required disabled={!accountOk || formLocked} />
+                  <Input id="emg-phone" value={emergencyPhone} onChange={(e) => setEmergencyPhone(limitRwandaPhoneInput(e.target.value))} placeholder="078XXXXXXX or +2507XXXXXXXX" inputMode="tel" maxLength={13} required disabled={!accountOk || formLocked} />
                 </div>
                 <div className="sm:col-span-2">
                   <Label htmlFor="skills">Skills & experience *</Label>
@@ -305,7 +320,7 @@ function TrustProfileInner() {
               </div>
               <div className="flex flex-wrap gap-3">
                 <Button type="submit" disabled={!accountOk || formLocked}>
-                  Submit for coordinator review
+                  {canRepairMetadataOnlySubmission ? "Re-upload documents for review" : "Submit for coordinator review"}
                 </Button>
                 <Button type="button" variant="outline" asChild>
                   <Link to="/volunteer/profile">Edit basic profile</Link>

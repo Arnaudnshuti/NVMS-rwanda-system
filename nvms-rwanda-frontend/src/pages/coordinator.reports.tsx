@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PortalShell } from "@/components/PortalShell";
 import { PageHeader } from "@/components/DashboardUI";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,23 +15,66 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/lib/auth";
-import { coordinatorDistrictScope } from "@/lib/portal-access";
-import { reportsForCoordinatorDistricts, pendingReportsForCoordinatorDistricts, patchAssignmentReportReview, type AssignmentReport } from "@/lib/assignment-reports";
-import { VOLUNTEERS } from "@/lib/mock-data";
 import { format } from "date-fns";
 import { toast } from "sonner";
+import { coordinatorListActivityLogsApi, coordinatorPatchActivityLogApi } from "@/lib/nvms-api";
+
+type AssignmentReport = {
+  id: string;
+  volunteerId: string;
+  volunteerName: string;
+  programId: string;
+  programTitle: string;
+  date: string;
+  hours: number;
+  narrative: string;
+  evidence?: { label: string; fileName: string; url?: string }[];
+  createdAt: string;
+  reviewStatus: "pending_review" | "approved" | "rejected";
+  coordinatorNote?: string;
+};
 
 function CoordinatorReportsPage() {
   const { user } = useAuth();
-  const scope = coordinatorDistrictScope(user);
 
-  const [version, setVersion] = useState(0);
-  const bump = () => setVersion((n) => n + 1);
+  const [remoteReports, setRemoteReports] = useState<AssignmentReport[]>([]);
 
-  const pending = useMemo(() => pendingReportsForCoordinatorDistricts(scope), [scope, version]);
-  const allScoped = useMemo(() => reportsForCoordinatorDistricts(scope), [scope, version]);
+  const loadRemote = async () => {
+    const r = await coordinatorListActivityLogsApi();
+    if (!r.ok) {
+      toast.error(r.error);
+      return;
+    }
+    setRemoteReports(
+      r.data.map((row) => ({
+        id: row.id,
+        volunteerId: row.volunteerId,
+        volunteerName: row.volunteerName ?? row.volunteerEmail ?? row.volunteerId,
+        programId: row.programId,
+        programTitle: row.programTitle ?? row.programId,
+        date: row.date,
+        hours: Number(row.hours),
+        narrative: row.description,
+        evidence: row.attachments?.map((a) => ({ label: "Field proof", fileName: a.fileName, url: a.url })),
+        createdAt: row.date,
+        reviewStatus: row.status === "pending" ? "pending_review" : row.status,
+      })),
+    );
+  };
 
-  const volunteerLabel = (id: string) => VOLUNTEERS.find((v) => v.id === id)?.name ?? id;
+  const bump = () => {
+    void loadRemote();
+  };
+
+  useEffect(() => {
+    void loadRemote();
+  }, []);
+
+  const pending = useMemo(
+    () => remoteReports.filter((r) => (r.reviewStatus ?? "pending_review") === "pending_review"),
+    [remoteReports],
+  );
+  const allScoped = useMemo(() => remoteReports, [remoteReports]);
 
   return (
     <PortalShell role="coordinator">
@@ -51,7 +94,7 @@ function CoordinatorReportsPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           {pending.map((r) => (
-            <ReportRow key={r.id} r={r} volunteerName={volunteerLabel(r.volunteerId)} onDecision={bump} />
+            <ReportRow key={r.id} r={r} volunteerName={r.volunteerName} onDecision={bump} />
           ))}
           {pending.length === 0 && (
             <p className="text-sm text-muted-foreground">No pending reports. Volunteers submit under My assignments.</p>
@@ -72,7 +115,7 @@ function CoordinatorReportsPage() {
                 <div className="min-w-0">
                   <div className="font-medium">{r.programTitle}</div>
                   <div className="text-xs text-muted-foreground">
-                    {volunteerLabel(r.volunteerId)} · {format(new Date(r.date), "MMM d, yyyy")} · {r.hours}h
+                    {r.volunteerName} · {format(new Date(r.date), "MMM d, yyyy")} · {r.hours}h
                     {typeof r.evidence?.length === "number" && r.evidence.length > 0 ? ` · ${r.evidence.length} file(s)` : ""}
                   </div>
                   <p className="mt-1 line-clamp-2 text-muted-foreground">{r.narrative}</p>
@@ -108,18 +151,20 @@ function ReportRow({ r, volunteerName, onDecision }: { r: AssignmentReport; volu
       toast.error("Add a short reason so the volunteer can correct the report.");
       return;
     }
-    const ok =
-      open === "approve"
-        ? patchAssignmentReportReview(r.id, { reviewStatus: "approved" })
-        : patchAssignmentReportReview(r.id, { reviewStatus: "rejected", coordinatorNote: note.trim() });
-    if (!ok) {
-      toast.error("Could not update report.");
-      return;
-    }
-    toast.success(open === "approve" ? "Report approved" : "Report returned for corrections");
-    setOpen(null);
-    setNote("");
-    onDecision();
+    void (async () => {
+      const res = await coordinatorPatchActivityLogApi(r.id, {
+        status: open === "approve" ? "approved" : "rejected",
+        coordinatorNote: note.trim() || undefined,
+      });
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success(open === "approve" ? "Report approved" : "Report returned for corrections");
+      setOpen(null);
+      setNote("");
+      onDecision();
+    })();
   };
 
   return (
@@ -140,7 +185,16 @@ function ReportRow({ r, volunteerName, onDecision }: { r: AssignmentReport; volu
       {r.evidence?.length ? (
         <ul className="mt-2 list-inside list-disc text-xs text-muted-foreground">
           {r.evidence.map((e, i) => (
-            <li key={i}>{e.label}: {e.fileName}</li>
+            <li key={i}>
+              {e.label}:{" "}
+              {e.url ? (
+                <a className="font-medium text-primary underline-offset-4 hover:underline" href={e.url} target="_blank" rel="noreferrer">
+                  {e.fileName}
+                </a>
+              ) : (
+                e.fileName
+              )}
+            </li>
           ))}
         </ul>
       ) : null}

@@ -21,6 +21,9 @@ CREATE DATABASE nvms_rwanda;
 DATABASE_URL="postgresql://YOUR_USER:YOUR_PASSWORD@localhost:5432/nvms_rwanda?schema=public"
 JWT_SECRET="replace-with-openssl-rand-hex-32"
 PORT=4000
+# Optional: enables AI-backed coordinator Smart Match.
+OPENAI_API_KEY="sk-..."
+OPENAI_MODEL="gpt-4o-mini"
 ```
 
 Use your real PostgreSQL username/password. On Windows, PostgreSQL often installs user `postgres`.
@@ -64,6 +67,7 @@ npm run dev
 | GET | `/api/me/assignments` | Volunteer assignments |
 | GET | `/api/me/activity-logs` | Volunteer logs |
 | GET | `/api/coordinator/volunteers` | District-scoped |
+| GET | `/api/coordinator/smart-match` | AI-backed volunteer ranking; query `programId` |
 | PATCH | `/api/coordinator/volunteers/:userId/verification` | `verified` / `rejected` |
 | PATCH | `/api/coordinator/volunteers/:userId/trust` | Trust status |
 | GET/PUT | `/api/admin/platform-config` | National taxonomy JSON |

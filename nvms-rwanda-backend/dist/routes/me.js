@@ -6,7 +6,7 @@ import { serializeUserWithDocs } from "../services/user.service.js";
 import multer from "multer";
 import PDFDocument from "pdfkit";
 import { ensureUploadsDir, makeSafeFileName, publicUploadUrl, uploadsDir } from "../services/uploads.service.js";
-import { createNotification } from "../services/notification.service.js";
+import { createNotification, notifyDistrictCoordinators } from "../services/notification.service.js";
 import { validateRwandaNationalId, validateRwandaPhone } from "../utils/validation.js";
 export const meRouter = Router();
 meRouter.use(requireAuth);
@@ -87,6 +87,7 @@ const profilePatchSchema = z.object({
     nationalId: z.string().optional(),
     trustSkillsSummary: z.string().optional(),
     phone: z.string().optional(),
+    district: z.string().optional(),
 });
 meRouter.patch("/profile", async (req, res) => {
     const parsed = profilePatchSchema.safeParse(req.body);
@@ -108,6 +109,15 @@ meRouter.patch("/profile", async (req, res) => {
             .map((s) => s.trim())
             .filter(Boolean) ?? undefined)
         : undefined;
+    const district = user.role === "volunteer" && b.district !== undefined
+        ? await prisma.district.findFirst({
+            where: { name: b.district.trim(), isActive: true },
+            select: { id: true, name: true },
+        })
+        : null;
+    if (user.role === "volunteer" && b.district !== undefined && !district) {
+        return res.status(400).json({ error: "Select a valid active district." });
+    }
     const updated = await prisma.user.update({
         where: { id: user.id },
         data: {
@@ -117,6 +127,7 @@ meRouter.patch("/profile", async (req, res) => {
             ...(user.role === "volunteer" && b.educationLevel !== undefined ? { educationLevel: b.educationLevel } : {}),
             ...(user.role === "volunteer" && b.nationalId !== undefined ? { nationalId: nationalIdCheck?.value ?? "" } : {}),
             ...(user.role === "volunteer" && b.trustSkillsSummary !== undefined ? { trustSkillsSummary: b.trustSkillsSummary } : {}),
+            ...(district ? { district: district.name, districtId: district.id } : {}),
             ...(skillsFromSummary !== undefined ? { skills: skillsFromSummary } : {}),
             ...(b.phone !== undefined ? { phone: phoneCheck?.value ?? "" } : {}),
         },
@@ -210,6 +221,13 @@ meRouter.post("/trust-submit", async (req, res) => {
         }),
     ]);
     const fresh = await prisma.user.findUnique({ where: { id: user.id } });
+    await notifyDistrictCoordinators({
+        district: user.district,
+        type: "INFO",
+        title: "Trusted profile review pending",
+        message: `${user.name} submitted identity and trust documents for review.`,
+        metadata: { volunteerId: user.id, profileTrustStatus: "pending_review" },
+    });
     res.json(await serializeUserWithDocs(fresh));
 });
 meRouter.get("/assignments", async (req, res) => {
@@ -401,6 +419,28 @@ meRouter.post("/activity-logs", upload.array("files", 8), async (req, res) => {
         message: "Your activity report was submitted and is awaiting review.",
         metadata: { activityLogId: created.id, programId: created.programId },
     });
+    const program = await prisma.program.findUnique({
+        where: { id: created.programId },
+        select: { title: true, district: true, coordinatorUserId: true },
+    });
+    if (program?.coordinatorUserId) {
+        await createNotification({
+            userId: program.coordinatorUserId,
+            type: "INFO",
+            title: "Activity report pending review",
+            message: `A volunteer submitted an activity report for ${program.title}.`,
+            metadata: { activityLogId: created.id, programId: created.programId },
+        });
+    }
+    else {
+        await notifyDistrictCoordinators({
+            district: program?.district,
+            type: "INFO",
+            title: "Activity report pending review",
+            message: `A volunteer submitted an activity report for ${program?.title ?? "a district program"}.`,
+            metadata: { activityLogId: created.id, programId: created.programId },
+        });
+    }
     return res.status(201).json({ id: created.id, message: "Activity submitted" });
 });
 meRouter.get("/notifications", async (req, res) => {

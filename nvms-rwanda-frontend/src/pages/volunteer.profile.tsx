@@ -13,10 +13,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { CheckCircle2, ShieldCheck, Clock, XCircle, Award } from "lucide-react";
 import { toast } from "sonner";
 import { dispatchAuthRefresh, useAuth } from "@/lib/auth";
-import { nvmsApiEnabled, patchMyProfileApi } from "@/lib/nvms-api";
+import { listDistrictsApi, nvmsApiEnabled, patchMyProfileApi, type ApiDistrict } from "@/lib/nvms-api";
 import { volunteerProfileForAuthUser } from "@/lib/volunteer-profile";
 import { resolveProfileTrustStatus } from "@/lib/portal-access";
 import { patchRegistryUserByEmail } from "@/lib/account-registry";
+import { RWANDA_DISTRICTS } from "@/lib/mock-data";
 import { limitNationalIdInput, validateRwandaNationalId } from "@/lib/validation";
 import {
   volunteerProfileMissingFields,
@@ -52,6 +53,8 @@ function ProfilePageInner() {
   const [educationLevel, setEducationLevel] = useState("");
   const [nationalId, setNationalId] = useState("");
   const [skillsLine, setSkillsLine] = useState("");
+  const [district, setDistrict] = useState("");
+  const [districts, setDistricts] = useState<ApiDistrict[]>([]);
 
   useEffect(() => {
     if (!user) return;
@@ -61,11 +64,22 @@ function ProfilePageInner() {
     setEducationLevel(user.educationLevel ?? "");
     setNationalId(user.nationalId ?? "");
     setSkillsLine(user.trustSkillsSummary?.trim() ? user.trustSkillsSummary : vp.skills.join(", "));
+    setDistrict(user.district ?? "");
   }, [user]);
 
+  useEffect(() => {
+    if (!nvmsApiEnabled()) return;
+    void listDistrictsApi().then((r) => {
+      if (r.ok) setDistricts(r.data);
+    });
+  }, []);
+
   if (!user) return null;
+  const apiOn = nvmsApiEnabled();
   const v = volunteerProfileForAuthUser(user);
   const isRegistry = String(user.id).startsWith("new-");
+  const canEdit = apiOn || isRegistry;
+  const districtOptions = districts.length ? districts.map((d) => d.name) : RWANDA_DISTRICTS;
   const verified = v.status === "verified";
   const rejected = v.status === "rejected";
   const trust = resolveProfileTrustStatus(user);
@@ -81,6 +95,10 @@ function ProfilePageInner() {
         toast.error("Add at least one skill.");
         return;
       }
+      if (!district.trim()) {
+        toast.error("Select your district.");
+        return;
+      }
       const nationalIdCheck = nationalId.trim() ? validateRwandaNationalId(nationalId, user.dateOfBirth) : null;
       if (nationalIdCheck && !nationalIdCheck.ok) {
         toast.error(nationalIdCheck.error);
@@ -88,6 +106,7 @@ function ProfilePageInner() {
       }
       if (nvmsApiEnabled()) {
         const res = await patchMyProfileApi({
+          district: district.trim(),
           volunteerAvailability: availability.trim(),
           profession: profession.trim(),
           educationLevel: educationLevel && educationLevel !== "__none" ? educationLevel : "",
@@ -111,6 +130,7 @@ function ProfilePageInner() {
       }
       const ok = patchRegistryUserByEmail(user.email, {
         volunteerAvailability: availability.trim(),
+        district: district.trim(),
         profession: profession.trim() || undefined,
         educationLevel: educationLevel.trim() || undefined,
         nationalId: nationalIdCheck?.value || undefined,
@@ -193,12 +213,27 @@ function ProfilePageInner() {
           <CardContent>
             <form className="grid gap-4 sm:grid-cols-2" onSubmit={save}>
               <div className="sm:col-span-2 text-xs text-muted-foreground">
-                {isRegistry ? "Updates save to this browser for self-registered accounts." : "Built-in demo account — viewing only."}
+                {apiOn
+                  ? "Updates save to your NVMS account."
+                  : isRegistry
+                    ? "Updates save to this browser for self-registered accounts."
+                    : "Built-in demo account - viewing only."}
               </div>
               <div><Label>Full name</Label><Input value={user.name} readOnly /></div>
               <div><Label>Email</Label><Input value={user.email} type="email" readOnly /></div>
               <div><Label>Phone</Label><Input value={v.phone} readOnly className={!v.phone.trim() ? "border-destructive/50" : ""} /></div>
-              <div><Label>District</Label><Input value={user.district ?? ""} readOnly /></div>
+              <div>
+                <Label>District</Label>
+                <Select value={district || "__none"} onValueChange={(value) => setDistrict(value === "__none" ? "" : value)} disabled={!canEdit}>
+                  <SelectTrigger><SelectValue placeholder="Select district" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">Select district</SelectItem>
+                    {districtOptions.map((name) => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="sm:col-span-2">
                 <Label htmlFor="avail">Availability *</Label>
                 <Input
@@ -206,7 +241,7 @@ function ProfilePageInner() {
                   value={availability}
                   onChange={(e) => setAvailability(e.target.value)}
                   placeholder="e.g. Weekends, evenings, August–October…"
-                  disabled={!isRegistry}
+                  disabled={!canEdit}
                 />
               </div>
               <div className="sm:col-span-2">
@@ -216,7 +251,7 @@ function ProfilePageInner() {
                   value={profession}
                   onChange={(e) => setProfession(e.target.value)}
                   placeholder="What you do today (student, farmer, nurse…)"
-                  disabled={!isRegistry}
+                  disabled={!canEdit}
                 />
               </div>
               <div className="sm:col-span-2">
@@ -224,7 +259,7 @@ function ProfilePageInner() {
                 <Select
                   value={educationLevel || "__none"}
                   onValueChange={(vl) => setEducationLevel(vl === "__none" ? "" : vl)}
-                  disabled={!isRegistry}
+                  disabled={!canEdit}
                 >
                   <SelectTrigger><SelectValue placeholder="Select level" /></SelectTrigger>
                   <SelectContent>
@@ -244,12 +279,12 @@ function ProfilePageInner() {
                   placeholder="1 1990 8 …"
                   inputMode="numeric"
                   maxLength={16}
-                  disabled={!isRegistry}
+                  disabled={!canEdit}
                 />
               </div>
               <div className="sm:col-span-2 flex justify-end gap-2">
-                <Button type="button" variant="ghost" disabled={!isRegistry} onClick={() => window.location.reload()}>Reset view</Button>
-                <Button type="submit" disabled={!isRegistry}>Save changes</Button>
+                <Button type="button" variant="ghost" disabled={!canEdit} onClick={() => window.location.reload()}>Reset view</Button>
+                <Button type="submit" disabled={!canEdit}>Save changes</Button>
               </div>
             </form>
           </CardContent>
@@ -283,7 +318,7 @@ function ProfilePageInner() {
                 value={skillsLine}
                 onChange={(e) => setSkillsLine(e.target.value)}
                 placeholder="Teaching, nursing, logistics…"
-                disabled={!isRegistry}
+                disabled={!canEdit}
               />
               <p className="mt-1 text-xs text-muted-foreground">
                 Coordinators match these strings to programme requirements before deployment.

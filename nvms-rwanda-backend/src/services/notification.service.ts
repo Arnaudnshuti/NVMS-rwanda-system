@@ -19,3 +19,62 @@ export async function createNotification(input: {
   });
 }
 
+export async function notifyDistrictCoordinators(input: {
+  district?: string | null;
+  title: string;
+  message: string;
+  type?: NotificationType;
+  metadata?: Record<string, unknown>;
+}) {
+  if (!input.district) return [];
+  const coordinators = await prisma.user.findMany({
+    where: {
+      role: "coordinator",
+      isActive: true,
+      govStatus: "active",
+      district: input.district,
+    },
+    select: { id: true },
+  });
+  return Promise.all(
+    coordinators.map((c) =>
+      createNotification({
+        userId: c.id,
+        title: input.title,
+        message: input.message,
+        type: input.type,
+        metadata: input.metadata,
+      }),
+    ),
+  );
+}
+
+export async function notifyProgramCoordinators(input: {
+  coordinatorUserId?: string | null;
+  district?: string | null;
+  title: string;
+  message: string;
+  type?: NotificationType;
+  metadata?: Record<string, unknown>;
+}) {
+  if (input.coordinatorUserId) {
+    return [
+      await createNotification({
+        userId: input.coordinatorUserId,
+        title: input.title,
+        message: input.message,
+        type: input.type,
+        metadata: input.metadata,
+      }),
+    ];
+  }
+
+  return notifyDistrictCoordinators({
+    district: input.district,
+    title: input.title,
+    message: input.message,
+    type: input.type,
+    metadata: input.metadata,
+  });
+}
+

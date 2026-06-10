@@ -31,15 +31,26 @@ const EDUCATION_LEVELS = [
   "Prefer not to say",
 ] as const;
 
-function fileMetaList(files: FileList | null, label: string) {
+function fileMetaList(files: FileList | File[] | null, label: string) {
   if (!files?.length) return [];
   return Array.from(files).map((f) => ({ label, fileName: f.name }));
 }
 
-function selectedFileSummary(files: FileList | null) {
+function selectedFileSummary(files: FileList | File[] | null) {
   if (!files?.length) return null;
   const names = Array.from(files).map((f) => f.name).join(", ");
   return `${files.length} file${files.length === 1 ? "" : "s"} selected: ${names}`;
+}
+
+function appendUniqueFiles(current: File[], incoming: FileList | null) {
+  if (!incoming?.length) return current;
+  const next = [...current];
+  for (const file of Array.from(incoming)) {
+    const key = `${file.name}:${file.size}:${file.lastModified}`;
+    const exists = next.some((f) => `${f.name}:${f.size}:${f.lastModified}` === key);
+    if (!exists) next.push(file);
+  }
+  return next;
 }
 
 function TrustProfilePage() {
@@ -62,8 +73,8 @@ function TrustProfileInner() {
   const [photo, setPhoto] = useState<FileList | null>(null);
   const [clearanceFiles, setClearanceFiles] = useState<FileList | null>(null);
   const [cvFiles, setCvFiles] = useState<FileList | null>(null);
-  const [certFiles, setCertFiles] = useState<FileList | null>(null);
-  const [otherFiles, setOtherFiles] = useState<FileList | null>(null);
+  const [certFiles, setCertFiles] = useState<File[]>([]);
+  const [otherFiles, setOtherFiles] = useState<File[]>([]);
 
   useEffect(() => {
     if (!user) return;
@@ -134,7 +145,7 @@ function TrustProfileInner() {
       if (nvmsApiEnabled()) {
         // Upload files first (real storage) then submit metadata for review.
         const uploads: { id: string; label: string; fileName: string }[] = [];
-        const up = async (label: string, fl: FileList | null) => {
+        const up = async (label: string, fl: FileList | File[] | null) => {
           if (!fl?.length) return;
           for (const f of Array.from(fl)) {
             const r = await uploadIdentityDocumentApi(label, f);
@@ -317,16 +328,26 @@ function TrustProfileInner() {
                 </div>
                 <div className="sm:col-span-2">
                   <Label htmlFor="certs">Professional certificates / diplomas (multiple documents)</Label>
-                  <Input id="certs" type="file" accept="image/*,.pdf,.doc,.docx" multiple className="cursor-pointer" disabled={!accountOk || formLocked} onChange={(e) => setCertFiles(e.target.files)} />
+                  <Input id="certs" type="file" accept="image/*,.pdf,.doc,.docx" multiple className="cursor-pointer" disabled={!accountOk || formLocked} onChange={(e) => setCertFiles((prev) => appendUniqueFiles(prev, e.target.files))} />
                   {selectedFileSummary(certFiles) && (
-                    <p className="mt-1.5 text-xs text-muted-foreground">{selectedFileSummary(certFiles)}</p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span>{selectedFileSummary(certFiles)}</span>
+                      <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={!accountOk || formLocked} onClick={() => setCertFiles([])}>
+                        Clear
+                      </Button>
+                    </div>
                   )}
                 </div>
                 <div className="sm:col-span-2">
                   <Label htmlFor="extras">Other documents (multiple documents)</Label>
-                  <Input id="extras" type="file" accept="image/*,.pdf,.doc,.docx" multiple className="cursor-pointer" disabled={!accountOk || formLocked} onChange={(e) => setOtherFiles(e.target.files)} />
+                  <Input id="extras" type="file" accept="image/*,.pdf,.doc,.docx" multiple className="cursor-pointer" disabled={!accountOk || formLocked} onChange={(e) => setOtherFiles((prev) => appendUniqueFiles(prev, e.target.files))} />
                   {selectedFileSummary(otherFiles) && (
-                    <p className="mt-1.5 text-xs text-muted-foreground">{selectedFileSummary(otherFiles)}</p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span>{selectedFileSummary(otherFiles)}</span>
+                      <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={!accountOk || formLocked} onClick={() => setOtherFiles([])}>
+                        Clear
+                      </Button>
+                    </div>
                   )}
                 </div>
               </div>

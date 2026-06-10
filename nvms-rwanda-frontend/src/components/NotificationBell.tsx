@@ -16,6 +16,7 @@ import { useAuth } from "@/lib/auth";
 import type { UserRole } from "@/lib/mock-data";
 
 type N = { id: string; icon: typeof Bell; title: string; desc: string; time: string; unread: boolean; tone: "info" | "success" | "warn" | "ai" };
+const NOTIFICATION_REFRESH_EVENT = "nvms:notifications-refresh";
 
 function fallbackNotifications(role?: UserRole): N[] {
   if (role === "admin") {
@@ -49,10 +50,12 @@ export function NotificationBell() {
       setItems(fallbackNotifications(user?.role));
       return;
     }
-    void (async () => {
-      setLoading(true);
+    let cancelled = false;
+    const load = async (silent = true) => {
+      if (!silent) setLoading(true);
       const r = await listMyNotificationsApi();
-      setLoading(false);
+      if (cancelled) return;
+      if (!silent) setLoading(false);
       if (!r.ok) {
         setItems([]);
         return;
@@ -68,7 +71,23 @@ export function NotificationBell() {
           tone: n.type === "SUCCESS" ? "success" : n.type === "WARNING" ? "warn" : n.type === "ERROR" ? "warn" : "info",
         })),
       );
-    })();
+    };
+    const refresh = () => void load(true);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    void load(false);
+    const timer = window.setInterval(refresh, 20000);
+    window.addEventListener("focus", refresh);
+    window.addEventListener(NOTIFICATION_REFRESH_EVENT, refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener(NOTIFICATION_REFRESH_EVENT, refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, [apiOn, user?.id, user?.role]);
 
   const markAll = () => {
@@ -116,8 +135,8 @@ export function NotificationBell() {
             return (
               <div
                 key={n.id}
-                className={cn("flex gap-3 p-3 transition-colors hover:bg-muted/50", n.unread && "bg-primary/[0.03]")}
-                onMouseEnter={() => {
+                className={cn("flex cursor-pointer gap-3 p-3 transition-colors hover:bg-muted/50", n.unread && "bg-primary/[0.03]")}
+                onClick={() => {
                   if (!n.unread) return;
                   setItems((prev) => prev.map((x) => (x.id === n.id ? { ...x, unread: false } : x)));
                   if (apiOn) void markNotificationReadApi(n.id);

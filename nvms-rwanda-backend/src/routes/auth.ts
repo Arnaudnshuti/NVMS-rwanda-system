@@ -6,7 +6,7 @@ import { serializeUserWithDocs } from "../services/user.service.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.middleware.js";
 import { writeAudit } from "../services/audit.service.js";
 import { sendTemplatedEmail } from "../services/email/mailer.js";
-import { createNotification } from "../services/notification.service.js";
+import { createNotification, notifyDistrictCoordinators } from "../services/notification.service.js";
 import { validateBirthDate, validateRwandaPhone } from "../utils/validation.js";
 
 export const authRouter = Router();
@@ -86,6 +86,14 @@ authRouter.post("/register", async (req, res) => {
       role: "volunteer",
       email: user.email,
     },
+  });
+
+  await notifyDistrictCoordinators({
+    district: user.district,
+    type: "WARNING",
+    title: "Volunteer approval pending",
+    message: `${user.name} registered as a volunteer in ${user.district ?? "your district"} and is waiting for approval.`,
+    metadata: { volunteerId: user.id, verificationStatus: "pending" },
   });
 
   return res.status(201).json({

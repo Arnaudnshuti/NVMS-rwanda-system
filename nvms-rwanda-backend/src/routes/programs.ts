@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ProgramStatus } from "@prisma/client";
 import { prisma } from "../services/prisma.service.js";
 import { requireAuth, requireRoles, type AuthRequest } from "../middlewares/auth.middleware.js";
+import { notifyProgramCoordinators } from "../services/notification.service.js";
 
 export const programsRouter = Router();
 
@@ -148,6 +149,15 @@ programsRouter.post("/", requireAuth, requireRoles("admin", "coordinator"), asyn
       coordinatorUserId: me.role === "coordinator" ? me.id : undefined,
     },
   });
+  if (me.role === "admin") {
+    await notifyProgramCoordinators({
+      district: program.district,
+      type: program.status === "draft" ? "INFO" : "SUCCESS",
+      title: program.status === "open" ? "New district program is open" : "New district program created",
+      message: `${program.title} was created for ${program.district}.`,
+      metadata: { programId: program.id, status: program.status },
+    });
+  }
   res.status(201).json(serializeProgram(program));
 });
 
@@ -194,6 +204,19 @@ programsRouter.patch("/:id", requireAuth, requireRoles("admin", "coordinator"), 
       ...(b.coordinatorDisplayName !== undefined ? { coordinatorDisplayName: b.coordinatorDisplayName } : {}),
     },
   });
+  if (me.role === "admin") {
+    const openedNow = existing.status !== "open" && program.status === "open";
+    await notifyProgramCoordinators({
+      coordinatorUserId: program.coordinatorUserId,
+      district: program.district,
+      type: openedNow ? "SUCCESS" : "INFO",
+      title: openedNow ? "District program published" : "District program updated",
+      message: openedNow
+        ? `${program.title} is now open for volunteer applications in ${program.district}.`
+        : `${program.title} was updated for ${program.district}.`,
+      metadata: { programId: program.id, previousStatus: existing.status, status: program.status },
+    });
+  }
   res.json(serializeProgram(program));
 });
 
@@ -220,6 +243,17 @@ programsRouter.delete("/:id", requireAuth, requireRoles("admin", "coordinator"),
     prisma.programApplication.deleteMany({ where: { programId: existing.id } }),
     prisma.program.delete({ where: { id: existing.id } }),
   ]);
+
+  if (me.role === "admin") {
+    await notifyProgramCoordinators({
+      coordinatorUserId: existing.coordinatorUserId,
+      district: existing.district,
+      type: "WARNING",
+      title: "District program removed",
+      message: `${existing.title} was removed from ${existing.district}.`,
+      metadata: { programId: existing.id, status: existing.status },
+    });
+  }
 
   res.json({ ok: true });
 });

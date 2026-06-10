@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "../services/prisma.service.js";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.middleware.js";
 import { volunteerEligibleToApply, eligibilityReason } from "../services/eligibility.service.js";
-import { createNotification } from "../services/notification.service.js";
+import { createNotification, notifyProgramCoordinators } from "../services/notification.service.js";
 
 export const applicationsRouter = Router();
 
@@ -81,15 +81,16 @@ applicationsRouter.post("/", requireAuth, async (req: AuthRequest, res) => {
     return created;
   });
 
-  if (program.coordinatorUserId) {
-    await createNotification({
-      userId: program.coordinatorUserId,
-      type: "INFO",
-      title: "New volunteer application",
-      message: `${volunteer.name} applied to ${program.title}.`,
-      metadata: { programId: program.id, applicationId: app.id },
-    });
-  } else {
+  await notifyProgramCoordinators({
+    coordinatorUserId: program.coordinatorUserId,
+    district: program.district,
+    type: "INFO",
+    title: "New volunteer application",
+    message: `${volunteer.name} applied to ${program.title}.`,
+    metadata: { programId: program.id, applicationId: app.id, volunteerId: volunteer.id },
+  });
+
+  if (!program.coordinatorUserId) {
     const admins = await prisma.user.findMany({ where: { role: "admin", isActive: true }, select: { id: true } });
     await Promise.all(
       admins.map((a) =>
@@ -102,6 +103,21 @@ applicationsRouter.post("/", requireAuth, async (req: AuthRequest, res) => {
         }),
       ),
     );
+  }
+
+  const remainingSlots = Math.max(0, program.slotsTotal - (program.slotsFilled + 1));
+  if (remainingSlots <= 2) {
+    await notifyProgramCoordinators({
+      coordinatorUserId: program.coordinatorUserId,
+      district: program.district,
+      type: remainingSlots === 0 ? "WARNING" : "INFO",
+      title: remainingSlots === 0 ? "Program slots are full" : "Program slots almost full",
+      message:
+        remainingSlots === 0
+          ? `${program.title} has reached its available application slots.`
+          : `${program.title} has ${remainingSlots} application slot${remainingSlots === 1 ? "" : "s"} remaining.`,
+      metadata: { programId: program.id, applicationId: app.id, remainingSlots },
+    });
   }
 
   res.status(201).json(serializeApplication(app));
@@ -228,6 +244,15 @@ applicationsRouter.patch("/:id", requireAuth, async (req: AuthRequest, res) => {
         parsed.data.status === "accepted"
           ? "Your application was accepted and the program now appears under My Assignments."
           : `Your application status is now ${parsed.data.status.replace("_", " ")}.`,
+      metadata: { applicationId: updated.id, status: parsed.data.status, programId: updated.programId },
+    });
+  } else if (parsed.data.status === "withdrawn") {
+    await notifyProgramCoordinators({
+      coordinatorUserId: app.program.coordinatorUserId,
+      district: app.program.district,
+      type: "WARNING",
+      title: "Application withdrawn",
+      message: `${updated.volunteer.name} withdrew from ${app.program.title}.`,
       metadata: { applicationId: updated.id, status: parsed.data.status, programId: updated.programId },
     });
   }

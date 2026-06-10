@@ -12,27 +12,51 @@ import { Badge } from "@/components/ui/badge";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { listMyNotificationsApi, markAllNotificationsReadApi, markNotificationReadApi, nvmsApiEnabled } from "@/lib/nvms-api";
+import { useAuth } from "@/lib/auth";
+import type { UserRole } from "@/lib/mock-data";
 
 type N = { id: string; icon: typeof Bell; title: string; desc: string; time: string; unread: boolean; tone: "info" | "success" | "warn" | "ai" };
 
-const SEED: N[] = [
-  { id: "n1", icon: Sparkles, tone: "ai", title: "Smart Match found 3 candidates", desc: "For 'Umuganda Digital Literacy Drive' in Gasabo.", time: "2m ago", unread: true },
-  { id: "n2", icon: CheckCircle2, tone: "success", title: "Activity log approved", desc: "Your 4h log on 25 Apr was approved.", time: "1h ago", unread: true },
-  { id: "n3", icon: AlertTriangle, tone: "warn", title: "Verification pending", desc: "142 volunteers awaiting district verification.", time: "Today", unread: false },
-  { id: "n4", icon: Info, tone: "info", title: "New program in Bugesera", desc: "Smart Agriculture Support is now open.", time: "Yesterday", unread: false },
-];
+function fallbackNotifications(role?: UserRole): N[] {
+  if (role === "admin") {
+    return [
+      { id: "admin-1", icon: AlertTriangle, tone: "warn", title: "Volunteer approvals pending", desc: "District queues have registrations waiting for review.", time: "Today", unread: true },
+      { id: "admin-2", icon: Sparkles, tone: "ai", title: "Weekly report ready", desc: "National participation summary is ready for review.", time: "Yesterday", unread: false },
+    ];
+  }
+  if (role === "coordinator") {
+    return [
+      { id: "coord-1", icon: CheckCircle2, tone: "success", title: "New program activity", desc: "A volunteer submitted a field report for your district.", time: "Today", unread: true },
+      { id: "coord-2", icon: Sparkles, tone: "ai", title: "Smart-match suggestions", desc: "Suggested volunteers are ready for an open program.", time: "Yesterday", unread: false },
+    ];
+  }
+  return [
+    { id: "vol-1", icon: CheckCircle2, tone: "success", title: "Activity log approved", desc: "Your latest volunteer report was reviewed.", time: "Today", unread: true },
+    { id: "vol-2", icon: Info, tone: "info", title: "New program available", desc: "A program matching your profile is open.", time: "Yesterday", unread: false },
+  ];
+}
 
 export function NotificationBell() {
   const { t } = useTranslation();
-  const [items, setItems] = useState<N[]>(SEED);
+  const { user } = useAuth();
   const apiOn = nvmsApiEnabled();
+  const [items, setItems] = useState<N[]>(() => (apiOn ? [] : fallbackNotifications(user?.role)));
+  const [loading, setLoading] = useState(false);
   const unread = items.filter((i) => i.unread).length;
 
   useEffect(() => {
-    if (!apiOn) return;
+    if (!apiOn) {
+      setItems(fallbackNotifications(user?.role));
+      return;
+    }
     void (async () => {
+      setLoading(true);
       const r = await listMyNotificationsApi();
-      if (!r.ok) return;
+      setLoading(false);
+      if (!r.ok) {
+        setItems([]);
+        return;
+      }
       setItems(
         r.data.map((n) => ({
           id: n.id,
@@ -45,7 +69,7 @@ export function NotificationBell() {
         })),
       );
     })();
-  }, [apiOn]);
+  }, [apiOn, user?.id, user?.role]);
 
   const markAll = () => {
     setItems((prev) => prev.map((i) => ({ ...i, unread: false })));
@@ -75,6 +99,12 @@ export function NotificationBell() {
         </DropdownMenuLabel>
         <DropdownMenuSeparator className="m-0" />
         <div className="max-h-96 overflow-y-auto">
+          {loading && <div className="p-4 text-sm text-muted-foreground">Loading notifications...</div>}
+          {!loading && items.length === 0 && (
+            <div className="p-4 text-sm text-muted-foreground">
+              No notifications for your {user?.role ?? "user"} account.
+            </div>
+          )}
           {items.map((n) => {
             const Icon = n.icon;
             const toneCls = {

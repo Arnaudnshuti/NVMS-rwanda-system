@@ -66,8 +66,23 @@ async function main() {
         "Capacity building",
         "Data collection / M&E",
       ],
+      featureFlags: {
+        emailVolunteerVerifications: true,
+        smsDeploymentNotifications: true,
+        weeklyAiReports: true,
+        smartMatchSuggestions: true,
+        anomalyDetection: false,
+      },
     },
-    update: {},
+    update: {
+      featureFlags: {
+        emailVolunteerVerifications: true,
+        smsDeploymentNotifications: true,
+        weeklyAiReports: true,
+        smartMatchSuggestions: true,
+        anomalyDetection: false,
+      },
+    },
   });
 
   const coordinator = await prisma.user.upsert({

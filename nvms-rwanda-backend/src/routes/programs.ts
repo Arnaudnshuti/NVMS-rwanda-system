@@ -120,7 +120,9 @@ programsRouter.post("/", requireAuth, requireRoles("admin", "coordinator"), asyn
   }
   if (!districtName) return res.status(400).json({ error: "district or districtId is required" });
   if (me.role === "coordinator") {
-    if ((me.districtId && districtId !== me.districtId) || (!me.districtId && me.district && districtName !== me.district)) {
+    const sameDistrictId = Boolean(me.districtId && districtId && districtId === me.districtId);
+    const sameDistrictName = Boolean(me.district && districtName === me.district);
+    if (!sameDistrictId && !sameDistrictName) {
       return res.status(403).json({ error: "Coordinators may only create programs in their district." });
     }
     districtId = me.districtId ?? districtId;

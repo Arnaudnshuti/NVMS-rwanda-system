@@ -80,6 +80,7 @@ meRouter.get("/identity-documents", async (req, res) => {
     })));
 });
 const profilePatchSchema = z.object({
+    name: z.string().min(1).optional(),
     volunteerAvailability: z.string().optional(),
     profession: z.string().optional(),
     educationLevel: z.string().optional(),
@@ -92,28 +93,30 @@ meRouter.patch("/profile", async (req, res) => {
     if (!parsed.success)
         return res.status(400).json({ error: parsed.error.flatten() });
     const user = await prisma.user.findUnique({ where: { id: req.userId } });
-    if (!user || user.role !== "volunteer") {
-        return res.status(403).json({ error: "Only volunteers may update this profile." });
-    }
+    if (!user)
+        return res.status(401).json({ error: "Unauthorized" });
     const b = parsed.data;
-    const nationalIdCheck = b.nationalId ? validateRwandaNationalId(b.nationalId, user.dateOfBirth) : null;
+    const nationalIdCheck = user.role === "volunteer" && b.nationalId ? validateRwandaNationalId(b.nationalId, user.dateOfBirth) : null;
     if (nationalIdCheck && !nationalIdCheck.ok)
         return res.status(400).json({ error: nationalIdCheck.error });
     const phoneCheck = b.phone ? validateRwandaPhone(b.phone) : null;
     if (phoneCheck && !phoneCheck.ok)
         return res.status(400).json({ error: phoneCheck.error });
-    const skillsFromSummary = b.trustSkillsSummary
-        ?.split(/[,;\n]/)
-        .map((s) => s.trim())
-        .filter(Boolean) ?? undefined;
+    const skillsFromSummary = user.role === "volunteer"
+        ? (b.trustSkillsSummary
+            ?.split(/[,;\n]/)
+            .map((s) => s.trim())
+            .filter(Boolean) ?? undefined)
+        : undefined;
     const updated = await prisma.user.update({
         where: { id: user.id },
         data: {
-            ...(b.volunteerAvailability !== undefined ? { volunteerAvailability: b.volunteerAvailability } : {}),
-            ...(b.profession !== undefined ? { profession: b.profession } : {}),
-            ...(b.educationLevel !== undefined ? { educationLevel: b.educationLevel } : {}),
-            ...(b.nationalId !== undefined ? { nationalId: nationalIdCheck?.value ?? "" } : {}),
-            ...(b.trustSkillsSummary !== undefined ? { trustSkillsSummary: b.trustSkillsSummary } : {}),
+            ...(b.name !== undefined ? { name: b.name.trim() } : {}),
+            ...(user.role === "volunteer" && b.volunteerAvailability !== undefined ? { volunteerAvailability: b.volunteerAvailability } : {}),
+            ...(user.role === "volunteer" && b.profession !== undefined ? { profession: b.profession } : {}),
+            ...(user.role === "volunteer" && b.educationLevel !== undefined ? { educationLevel: b.educationLevel } : {}),
+            ...(user.role === "volunteer" && b.nationalId !== undefined ? { nationalId: nationalIdCheck?.value ?? "" } : {}),
+            ...(user.role === "volunteer" && b.trustSkillsSummary !== undefined ? { trustSkillsSummary: b.trustSkillsSummary } : {}),
             ...(skillsFromSummary !== undefined ? { skills: skillsFromSummary } : {}),
             ...(b.phone !== undefined ? { phone: phoneCheck?.value ?? "" } : {}),
         },

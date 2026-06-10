@@ -26,17 +26,20 @@ import {
   deleteProgramApi,
   fetchAdminProgramsFromApi,
   fetchMyApplicationsFromApi,
+  getPlatformConfigApi,
   listDistrictsApi,
+  nvmsApiEnabled,
+  putPlatformConfigApi,
   updateProgramApi,
   type ApiDistrict,
   type ProgramMutation,
 } from "@/lib/nvms-api";
-import { Eye, Pencil, Plus, Send, Trash2 } from "lucide-react";
+import { Eye, ListChecks, Pencil, Plus, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { getPlatformMasterData, normalizeProgramCategories, savePlatformMasterData } from "@/lib/platform-config";
 
 type Program = Awaited<ReturnType<typeof fetchAdminProgramsFromApi>>[number];
 
-const CATEGORIES = ["Education", "Health", "Environment", "Agriculture", "Community", "Emergency"] as const;
 const STATUSES = ["draft", "open", "in_progress", "completed"] as const;
 
 type ProgramFormState = {
@@ -125,18 +128,49 @@ function AdminPrograms() {
   const [details, setDetails] = useState<Program | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Program | null>(null);
   const [form, setForm] = useState<ProgramFormState>(emptyForm());
+  const [categories, setCategories] = useState<string[]>(() => getPlatformMasterData().programTypes);
+  const [categoryText, setCategoryText] = useState(() => getPlatformMasterData().programTypes.join("\n"));
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+  const [platformConfig, setPlatformConfig] = useState<{
+    volunteerCategories: string[];
+    organizationName?: string;
+    contactEmail?: string;
+    supportPhone?: string;
+    featureFlags?: Record<string, boolean>;
+  }>({ volunteerCategories: getPlatformMasterData().volunteerCategories });
 
   const load = useCallback(async () => {
     try {
-      const [programRows, appRows, districtRows] = await Promise.all([
+      const [programRows, appRows, districtRows, configRows] = await Promise.all([
         fetchAdminProgramsFromApi(),
         fetchMyApplicationsFromApi(),
         listDistrictsApi(),
+        getPlatformConfigApi(),
       ]);
       setPrograms(programRows);
       setApplications(appRows);
       if (districtRows.ok) setDistricts(districtRows.data);
       else toast.error(districtRows.error);
+      if (configRows.ok) {
+        const nextCategories = normalizeProgramCategories(configRows.data.programTypes);
+        setCategories(nextCategories);
+        setCategoryText(nextCategories.join("\n"));
+        savePlatformMasterData({
+          volunteerCategories: configRows.data.volunteerCategories,
+          programTypes: nextCategories,
+          organizationName: configRows.data.organizationName,
+          contactEmail: configRows.data.contactEmail,
+          supportPhone: configRows.data.supportPhone,
+          featureFlags: configRows.data.featureFlags,
+        });
+        setPlatformConfig({
+          volunteerCategories: configRows.data.volunteerCategories,
+          organizationName: configRows.data.organizationName,
+          contactEmail: configRows.data.contactEmail,
+          supportPhone: configRows.data.supportPhone,
+          featureFlags: configRows.data.featureFlags,
+        });
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not load programs");
     }
@@ -227,12 +261,66 @@ function AdminPrograms() {
     await load();
   };
 
+  const saveCategories = async () => {
+    const programTypes = categoryText.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (!programTypes.length) {
+      toast.error("Add at least one program category.");
+      return;
+    }
+    setBusy(true);
+    if (nvmsApiEnabled()) {
+      const res = await putPlatformConfigApi({
+        volunteerCategories: platformConfig.volunteerCategories.length ? platformConfig.volunteerCategories : getPlatformMasterData().volunteerCategories,
+        programTypes,
+        organizationName: platformConfig.organizationName,
+        contactEmail: platformConfig.contactEmail,
+        supportPhone: platformConfig.supportPhone,
+        featureFlags: platformConfig.featureFlags,
+      });
+      setBusy(false);
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      setCategories(res.data.programTypes);
+      setCategoryText(res.data.programTypes.join("\n"));
+      savePlatformMasterData({
+        volunteerCategories: res.data.volunteerCategories,
+        programTypes: res.data.programTypes,
+        organizationName: res.data.organizationName,
+        contactEmail: res.data.contactEmail,
+        supportPhone: res.data.supportPhone,
+        featureFlags: res.data.featureFlags,
+      });
+      toast.success("Program categories saved.");
+      setCategoryDialogOpen(false);
+      return;
+    }
+
+    savePlatformMasterData({
+      ...getPlatformMasterData(),
+      programTypes,
+    });
+    setBusy(false);
+    setCategories(programTypes);
+    setCategoryDialogOpen(false);
+    toast.success("Program categories saved for this browser.");
+  };
+
   return (
     <PortalShell role="admin">
       <PageHeader
         title="All Programs"
         description="National backend view of every volunteer program. Drafts stay hidden from volunteers until published."
-        actions={<Button onClick={openCreate}><Plus className="mr-1.5 h-4 w-4" /> Add program</Button>}
+        actions={(
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => setCategoryDialogOpen(true)}>
+              <ListChecks className="mr-1.5 h-4 w-4" />
+              Program categories
+            </Button>
+            <Button onClick={openCreate}><Plus className="mr-1.5 h-4 w-4" /> Add program</Button>
+          </div>
+        )}
       />
 
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
@@ -280,7 +368,7 @@ function AdminPrograms() {
                 <Label>Category</Label>
                 <Select value={form.category} onValueChange={(category) => setForm({ ...form, category })}>
                   <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
-                  <SelectContent>{CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                  <SelectContent>{categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div>
@@ -323,6 +411,34 @@ function AdminPrograms() {
               <Button type="submit" disabled={busy}>{busy ? "Saving..." : "Save program"}</Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Program categories</DialogTitle>
+            <DialogDescription>
+              Manage the same Program categories list from Settings. These choices appear in admin and coordinator create/edit program forms.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="program-categories">Program categories</Label>
+            <Textarea
+              id="program-categories"
+              rows={10}
+              value={categoryText}
+              onChange={(e) => setCategoryText(e.target.value)}
+              placeholder="One category per line"
+            />
+            <p className="text-xs text-muted-foreground">
+              One category per line. Examples: Education, Health, Environment, Agriculture, Emergency response.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCategoryDialogOpen(false)}>Cancel</Button>
+            <Button type="button" onClick={saveCategories} disabled={busy}>{busy ? "Saving..." : "Save program categories"}</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

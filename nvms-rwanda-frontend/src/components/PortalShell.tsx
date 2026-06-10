@@ -3,7 +3,7 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   LayoutDashboard, User, Briefcase, ClipboardList, Award, LogOut,
-  Users, MapPin, BarChart3, Settings, Sparkles, CheckCircle2, Search, Building2, HeartHandshake, FileCheck2, Bell, Send, Inbox, FileText, ScrollText,
+  Users, MapPin, BarChart3, Settings, Sparkles, CheckCircle2, Search, FileCheck2, Send, Inbox, FileText, ScrollText,
   Truck,
 } from "lucide-react";
 import { useAuth, dashboardPathFor } from "@/lib/auth";
@@ -31,10 +31,10 @@ const NAV: Record<UserRole, NavItem[]> = {
     { to: "/volunteer/assignments", labelKey: "portal.myAssignments", icon: CheckCircle2 },
     { to: "/volunteer/activity", labelKey: "portal.activityLog", icon: ClipboardList },
     { to: "/volunteer/certificates", labelKey: "portal.certificates", icon: Award },
-    { to: "/notifications", labelKey: "common.notifications", icon: Bell },
   ],
   coordinator: [
     { to: "/coordinator", labelKey: "portal.dashboard", icon: LayoutDashboard },
+    { to: "/profile", labelKey: "portal.myProfile", icon: User },
     { to: "/coordinator/programs", labelKey: "portal.programs", icon: Briefcase },
     { to: "/coordinator/volunteers", labelKey: "portal.volunteers", icon: Users },
     { to: "/coordinator/applications", labelKey: "portal.programApplications", icon: Inbox },
@@ -43,21 +43,18 @@ const NAV: Record<UserRole, NavItem[]> = {
     { to: "/coordinator/smart-match", labelKey: "portal.smartMatch", icon: Sparkles },
     { to: "/coordinator/resources", labelKey: "portal.resources", icon: Truck },
     { to: "/coordinator/messages", labelKey: "portal.messages", icon: Send },
-    { to: "/notifications", labelKey: "common.notifications", icon: Bell },
   ],
   admin: [
     { to: "/admin", labelKey: "portal.nationalOverview", icon: LayoutDashboard },
+    { to: "/profile", labelKey: "portal.myProfile", icon: User },
     { to: "/admin/analytics", labelKey: "portal.analytics", icon: BarChart3 },
     { to: "/admin/districts", labelKey: "portal.districts", icon: MapPin },
     { to: "/admin/users", labelKey: "portal.usersRoles", icon: Users },
     { to: "/admin/audit", labelKey: "portal.auditLog", icon: ScrollText },
     { to: "/admin/invites", labelKey: "portal.userInvites", icon: User },
-    { to: "/admin/users?role=volunteer", labelKey: "portal.volunteerWorkspace", icon: HeartHandshake },
-    { to: "/admin/users?role=coordinator", labelKey: "portal.coordinatorWorkspace", icon: Building2 },
     { to: "/admin/programs", labelKey: "portal.programs", icon: Briefcase },
     { to: "/admin/reports", labelKey: "portal.aiReports", icon: Sparkles },
     { to: "/admin/settings", labelKey: "common.settings", icon: Settings },
-    { to: "/notifications", labelKey: "common.notifications", icon: Bell },
   ],
 };
 
@@ -132,16 +129,18 @@ export function PortalShell({ role, children }: PortalShellProps) {
           })}
         </nav>
         <div className="border-t border-sidebar-border p-3">
-          <div className="flex items-center gap-3 rounded-md px-2 py-2">
-            <Avatar className="h-9 w-9">
-              <AvatarFallback className="bg-sidebar-primary text-sidebar-primary-foreground">
-                {user.name.split(" ").map((n) => n[0]).slice(0, 2).join("")}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{user.name}</div>
-              <div className="truncate text-xs text-sidebar-foreground/60">{roleLabel}</div>
-            </div>
+          <div className="flex items-center gap-2 rounded-md px-2 py-2">
+            <Link to={user.role === "volunteer" ? "/volunteer/profile" : "/profile"} className="flex min-w-0 flex-1 items-center gap-3 rounded-md transition-colors hover:text-sidebar-accent-foreground">
+              <Avatar className="h-9 w-9">
+                <AvatarFallback className="bg-sidebar-primary text-sidebar-primary-foreground">
+                  {user.name.split(" ").map((n) => n[0]).slice(0, 2).join("")}
+                </AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{user.name}</div>
+                <div className="truncate text-xs text-sidebar-foreground/60">{roleLabel}</div>
+              </div>
+            </Link>
             <Button
               variant="ghost"
               size="icon"

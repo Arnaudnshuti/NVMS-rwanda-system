@@ -8,6 +8,7 @@ import AboutPage from "@/pages/about";
 import ProgramsPage from "@/pages/programs";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
+import AccountProfilePage from "@/pages/profile";
 
 import VolunteerIndex from "@/pages/volunteer.index";
 import VolunteerActivity from "@/pages/volunteer.activity";
@@ -39,7 +40,6 @@ import AdminInvites from "@/pages/admin.invites";
 import AdminAudit from "@/pages/admin.audit";
 import ForgotPasswordPage from "@/pages/forgot-password";
 import VerifyEmailPage from "@/pages/verify-email";
-import NotificationsPage from "@/pages/notifications";
 import ChangePasswordPage from "@/pages/change-password";
 
 function NotFound() {
@@ -77,6 +77,7 @@ export default function App() {
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/verify-email" element={<VerifyEmailPage />} />
           <Route path="/change-password" element={<ChangePasswordPage />} />
+          <Route path="/profile" element={<AccountProfilePage />} />
 
           <Route path="/volunteer" element={<VolunteerIndex />} />
           <Route path="/volunteer/activity" element={<VolunteerActivity />} />
@@ -106,7 +107,6 @@ export default function App() {
           <Route path="/admin/users" element={<AdminUsers />} />
           <Route path="/admin/invites" element={<AdminInvites />} />
           <Route path="/admin/audit" element={<AdminAudit />} />
-          <Route path="/notifications" element={<NotificationsPage />} />
 
           <Route path="*" element={<NotFound />} />
         </Routes>

@@ -9,7 +9,7 @@ import { createNotification } from "../services/notification.service.js";
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import { Document, Packer, Paragraph, TextRun } from "docx";
-import { validateRwandaPhone } from "../utils/validation.js";
+import { validateBirthDate, validateRwandaPhone } from "../utils/validation.js";
 
 export const adminRouter = Router();
 
@@ -18,10 +18,13 @@ adminRouter.use(requireAuth, requireRoles("admin"));
 const createCoordinatorSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
-  role: z.enum(["coordinator", "admin"]).default("coordinator"),
+  role: z.enum(["volunteer", "coordinator", "admin"]).default("coordinator"),
   district: z.string().min(1).optional(),
   districtId: z.string().min(1).optional(),
   phone: z.string().min(3).optional(),
+  contactPreference: z.enum(["email", "sms", "both"]).optional(),
+  dateOfBirth: z.string().optional(),
+  verificationStatus: z.enum(["pending", "verified", "rejected"]).optional(),
   temporaryPassword: z.string().min(8).optional(),
 });
 
@@ -49,13 +52,16 @@ adminRouter.post("/users", async (req: AuthRequest, res) => {
     const d = await prisma.district.findUnique({ where: { name: districtName } });
     if (d?.isActive) districtId = d.id;
   }
-  if (role === "coordinator" && !districtName) {
-    return res.status(400).json({ error: "district or districtId is required for coordinators" });
+  if ((role === "coordinator" || role === "volunteer") && !districtName) {
+    return res.status(400).json({ error: "district or districtId is required for coordinators and volunteers" });
   }
 
   const tempPassword = parsed.data.temporaryPassword ?? generateTemporaryPassword();
   const phoneCheck = parsed.data.phone ? validateRwandaPhone(parsed.data.phone) : null;
   if (phoneCheck && !phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
+  if (role === "volunteer" && !parsed.data.phone) return res.status(400).json({ error: "phone is required for volunteers" });
+  const dobCheck = role === "volunteer" ? validateBirthDate(parsed.data.dateOfBirth) : null;
+  if (dobCheck && !dobCheck.ok) return res.status(400).json({ error: dobCheck.error });
   const passwordHash = await hashPassword(tempPassword);
 
   const created = await prisma.user.create({
@@ -63,14 +69,20 @@ adminRouter.post("/users", async (req: AuthRequest, res) => {
       name: parsed.data.name.trim(),
       email,
       role,
-      district: role === "coordinator" ? districtName : undefined,
-      districtId: role === "coordinator" ? districtId : undefined,
+      district: role === "coordinator" || role === "volunteer" ? districtName : undefined,
+      districtId: role === "coordinator" || role === "volunteer" ? districtId : undefined,
       phone: phoneCheck?.value,
       passwordHash,
       isActive: true,
       mustChangePassword: true,
       govStatus: "active",
-      verificationStatus: "verified",
+      verificationStatus:
+        role === "volunteer"
+          ? (parsed.data.verificationStatus ?? "pending")
+          : "verified",
+      profileTrustStatus: role === "volunteer" ? "unsubmitted" : undefined,
+      contactPreference: role === "volunteer" ? (parsed.data.contactPreference ?? "both") : undefined,
+      dateOfBirth: dobCheck?.value,
     },
     select: {
       id: true,
@@ -82,6 +94,9 @@ adminRouter.post("/users", async (req: AuthRequest, res) => {
       phone: true,
       isActive: true,
       mustChangePassword: true,
+      govStatus: true,
+      verificationStatus: true,
+      profileTrustStatus: true,
       createdAt: true,
     },
   });
@@ -111,7 +126,12 @@ adminRouter.post("/users", async (req: AuthRequest, res) => {
   await createNotification({
     userId: created.id,
     type: "INFO",
-    title: role === "coordinator" ? "You were invited as coordinator" : "You were invited as ministry administrator",
+    title:
+      role === "volunteer"
+        ? "Your volunteer account was created"
+        : role === "coordinator"
+          ? "You were invited as coordinator"
+          : "You were invited as ministry administrator",
     message: "Use temporary credentials from your invitation email and change password within 24 hours.",
     metadata: { district: created.district },
   });
@@ -195,6 +215,7 @@ adminRouter.get("/platform-config", async (_req, res) => {
     return res.json({
       volunteerCategories: [],
       programTypes: [],
+      featureFlags: {},
     });
   }
   res.json({
@@ -203,6 +224,7 @@ adminRouter.get("/platform-config", async (_req, res) => {
     organizationName: row.organizationName ?? "Ministry of Local Government — Rwanda",
     contactEmail: row.contactEmail ?? "volunteer@minaloc.gov.rw",
     supportPhone: row.supportPhone ?? "+250 788 000 000",
+    featureFlags: row.featureFlags ?? {},
   });
 });
 
@@ -212,6 +234,7 @@ const platformSchema = z.object({
   organizationName: z.string().optional(),
   contactEmail: z.string().optional(),
   supportPhone: z.string().optional(),
+  featureFlags: z.record(z.boolean()).optional(),
 });
 
 adminRouter.put("/platform-config", async (req: AuthRequest, res) => {
@@ -227,6 +250,7 @@ adminRouter.put("/platform-config", async (req: AuthRequest, res) => {
       organizationName: parsed.data.organizationName,
       contactEmail: parsed.data.contactEmail,
       supportPhone: parsed.data.supportPhone,
+      featureFlags: parsed.data.featureFlags ?? {},
     },
     update: {
       volunteerCategories: parsed.data.volunteerCategories.filter(Boolean),
@@ -234,6 +258,7 @@ adminRouter.put("/platform-config", async (req: AuthRequest, res) => {
       organizationName: parsed.data.organizationName,
       contactEmail: parsed.data.contactEmail,
       supportPhone: parsed.data.supportPhone,
+      featureFlags: parsed.data.featureFlags ?? {},
     },
   });
 
@@ -243,6 +268,7 @@ adminRouter.put("/platform-config", async (req: AuthRequest, res) => {
     organizationName: row.organizationName ?? undefined,
     contactEmail: row.contactEmail ?? undefined,
     supportPhone: row.supportPhone ?? undefined,
+    featureFlags: row.featureFlags ?? {},
   });
 });
 
@@ -902,19 +928,29 @@ adminRouter.patch("/users/:userId/gov-status", async (req: AuthRequest, res) => 
 });
 
 const updateUserSchema = z.object({
-  district: z.string().min(1).optional(),
-  districtId: z.string().min(1).optional(),
+  name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+  role: z.enum(["volunteer", "coordinator", "admin"]).optional(),
+  phone: z.string().min(3).nullable().optional(),
+  district: z.string().min(1).nullable().optional(),
+  districtId: z.string().min(1).nullable().optional(),
   govStatus: z.enum(["active", "suspended", "revoked"]).optional(),
   isActive: z.boolean().optional(),
   mfaResetPending: z.boolean().optional(),
+  verificationStatus: z.enum(["pending", "verified", "rejected"]).nullable().optional(),
+  profileTrustStatus: z.enum(["unsubmitted", "pending_review", "verified", "rejected"]).nullable().optional(),
 });
 
 adminRouter.patch("/users/:userId", async (req: AuthRequest, res) => {
   const parsed = updateUserSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  let districtName = parsed.data.district;
-  let districtId = parsed.data.districtId;
+  const existing = await prisma.user.findUnique({ where: { id: req.params.userId } });
+  if (!existing) return res.status(404).json({ error: "User not found" });
+
+  const nextRole = parsed.data.role ?? existing.role;
+  let districtName = parsed.data.district === null ? null : parsed.data.district;
+  let districtId = parsed.data.districtId === null ? null : parsed.data.districtId;
   if (districtId) {
     const d = await prisma.district.findUnique({ where: { id: districtId } });
     if (!d || !d.isActive) return res.status(400).json({ error: "Invalid districtId" });
@@ -923,15 +959,31 @@ adminRouter.patch("/users/:userId", async (req: AuthRequest, res) => {
     const d = await prisma.district.findUnique({ where: { name: districtName } });
     if (d?.isActive) districtId = d.id;
   }
+  if (nextRole === "admin") {
+    districtName = null;
+    districtId = null;
+  }
+  if ((nextRole === "coordinator" || nextRole === "volunteer") && districtName === undefined && !existing.district) {
+    return res.status(400).json({ error: "district or districtId is required for coordinators and volunteers" });
+  }
+
+  const phoneCheck = parsed.data.phone ? validateRwandaPhone(parsed.data.phone) : null;
+  if (phoneCheck && !phoneCheck.ok) return res.status(400).json({ error: phoneCheck.error });
 
   const updated = await prisma.user.update({
     where: { id: req.params.userId },
     data: {
+      ...(parsed.data.name !== undefined ? { name: parsed.data.name.trim() } : {}),
+      ...(parsed.data.email !== undefined ? { email: parsed.data.email.trim().toLowerCase() } : {}),
+      ...(parsed.data.role !== undefined ? { role: parsed.data.role } : {}),
+      ...(parsed.data.phone !== undefined ? { phone: parsed.data.phone === null ? null : phoneCheck?.value } : {}),
       ...(districtName !== undefined ? { district: districtName } : {}),
       ...(districtId !== undefined ? { districtId } : {}),
       ...(parsed.data.govStatus !== undefined ? { govStatus: parsed.data.govStatus } : {}),
       ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {}),
       ...(parsed.data.mfaResetPending !== undefined ? { mfaResetPending: parsed.data.mfaResetPending } : {}),
+      ...(parsed.data.verificationStatus !== undefined ? { verificationStatus: parsed.data.verificationStatus } : {}),
+      ...(parsed.data.profileTrustStatus !== undefined ? { profileTrustStatus: parsed.data.profileTrustStatus } : {}),
     },
     select: {
       id: true,

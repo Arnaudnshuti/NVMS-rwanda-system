@@ -236,6 +236,7 @@ model PlatformConfig {
   organizationName    String?
   contactEmail        String?
   supportPhone        String?
+  featureFlags        Json   @default("{}")
 }
 
 enum AuditActionType {

@@ -28,3 +28,25 @@ metaRouter.get("/public-stats", async (_req, res) => {
   });
 });
 
+metaRouter.get("/platform-config", async (_req, res) => {
+  const row = await prisma.platformConfig.findUnique({ where: { id: 1 } });
+  if (!row) {
+    return res.json({
+      volunteerCategories: [],
+      programTypes: [],
+      organizationName: undefined,
+      contactEmail: undefined,
+      supportPhone: undefined,
+      featureFlags: {},
+    });
+  }
+  res.json({
+    volunteerCategories: row.volunteerCategories as string[],
+    programTypes: row.programTypes as string[],
+    organizationName: row.organizationName ?? undefined,
+    contactEmail: row.contactEmail ?? undefined,
+    supportPhone: row.supportPhone ?? undefined,
+    featureFlags: row.featureFlags ?? {},
+  });
+});
+

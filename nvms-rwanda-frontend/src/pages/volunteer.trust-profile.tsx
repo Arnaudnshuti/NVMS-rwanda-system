@@ -36,6 +36,12 @@ function fileMetaList(files: FileList | null, label: string) {
   return Array.from(files).map((f) => ({ label, fileName: f.name }));
 }
 
+function selectedFileSummary(files: FileList | null) {
+  if (!files?.length) return null;
+  const names = Array.from(files).map((f) => f.name).join(", ");
+  return `${files.length} file${files.length === 1 ? "" : "s"} selected: ${names}`;
+}
+
 function TrustProfilePage() {
   return (
     <PortalShell role="volunteer">
@@ -310,12 +316,18 @@ function TrustProfileInner() {
                   <Input id="cv" type="file" accept=".pdf,image/*" className="cursor-pointer" disabled={!accountOk || formLocked} onChange={(e) => setCvFiles(e.target.files)} />
                 </div>
                 <div className="sm:col-span-2">
-                  <Label htmlFor="certs">Professional certificates / diplomas (multiple)</Label>
-                  <Input id="certs" type="file" accept="image/*,.pdf" multiple className="cursor-pointer" disabled={!accountOk || formLocked} onChange={(e) => setCertFiles(e.target.files)} />
+                  <Label htmlFor="certs">Professional certificates / diplomas (multiple documents)</Label>
+                  <Input id="certs" type="file" accept="image/*,.pdf,.doc,.docx" multiple className="cursor-pointer" disabled={!accountOk || formLocked} onChange={(e) => setCertFiles(e.target.files)} />
+                  {selectedFileSummary(certFiles) && (
+                    <p className="mt-1.5 text-xs text-muted-foreground">{selectedFileSummary(certFiles)}</p>
+                  )}
                 </div>
                 <div className="sm:col-span-2">
-                  <Label htmlFor="extras">Other documents (motivation letters, sector endorsements…)</Label>
+                  <Label htmlFor="extras">Other documents (multiple documents)</Label>
                   <Input id="extras" type="file" accept="image/*,.pdf,.doc,.docx" multiple className="cursor-pointer" disabled={!accountOk || formLocked} onChange={(e) => setOtherFiles(e.target.files)} />
+                  {selectedFileSummary(otherFiles) && (
+                    <p className="mt-1.5 text-xs text-muted-foreground">{selectedFileSummary(otherFiles)}</p>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap gap-3">

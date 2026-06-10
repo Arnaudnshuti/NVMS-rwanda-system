@@ -270,6 +270,7 @@ export async function putPlatformConfigApi(body: {
   organizationName?: string;
   contactEmail?: string;
   supportPhone?: string;
+  featureFlags?: Record<string, boolean>;
 }) {
   return apiFetchJson<{
     volunteerCategories: string[];
@@ -277,6 +278,7 @@ export async function putPlatformConfigApi(body: {
     organizationName?: string;
     contactEmail?: string;
     supportPhone?: string;
+    featureFlags?: Record<string, boolean>;
   }>("/api/admin/platform-config", {
     method: "PUT",
     json: body,
@@ -290,7 +292,19 @@ export async function getPlatformConfigApi() {
     organizationName?: string;
     contactEmail?: string;
     supportPhone?: string;
+    featureFlags?: Record<string, boolean>;
   }>("/api/admin/platform-config");
+}
+
+export async function getPublicPlatformConfigApi() {
+  return apiFetchJson<{
+    volunteerCategories: string[];
+    programTypes: string[];
+    organizationName?: string;
+    contactEmail?: string;
+    supportPhone?: string;
+    featureFlags?: Record<string, boolean>;
+  }>("/api/meta/platform-config");
 }
 
 export type ApiUserRow = {
@@ -317,11 +331,17 @@ export async function adminListUsersApi() {
 export async function adminUpdateUserApi(
   userId: string,
   body: {
+    name?: string;
+    email?: string;
+    role?: "admin" | "coordinator" | "volunteer";
+    phone?: string | null;
     district?: string;
-    districtId?: string;
+    districtId?: string | null;
     govStatus?: "active" | "suspended" | "revoked";
     isActive?: boolean;
     mfaResetPending?: boolean;
+    verificationStatus?: "pending" | "verified" | "rejected" | null;
+    profileTrustStatus?: "unsubmitted" | "pending_review" | "verified" | "rejected" | null;
   },
 ) {
   return apiFetchJson<ApiUserRow>(`/api/admin/users/${encodeURIComponent(userId)}`, {
@@ -333,10 +353,13 @@ export async function adminUpdateUserApi(
 export async function adminCreateCoordinatorApi(body: {
   name: string;
   email: string;
-  role?: "coordinator" | "admin";
+  role?: "volunteer" | "coordinator" | "admin";
   district?: string;
   districtId?: string;
   phone?: string;
+  dateOfBirth?: string;
+  contactPreference?: "email" | "sms" | "both";
+  verificationStatus?: "pending" | "verified" | "rejected";
 }) {
   return apiFetchJson<{ user: ApiUserRow; temporaryPassword: string }>("/api/admin/users", {
     method: "POST",
